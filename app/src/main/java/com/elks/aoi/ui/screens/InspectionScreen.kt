@@ -10,6 +10,7 @@ import androidx.compose.ui.unit.dp
 import com.elks.aoi.camera.*
 import com.elks.aoi.data.BoardEntity
 import com.elks.aoi.data.BoardRepository
+import com.elks.aoi.vision.OpenCvInspector
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -58,23 +59,19 @@ fun InspectionScreen(
         onCapture = { captured ->
             if (isAnalyzing) return@CameraCaptureScreen
             isAnalyzing = true
-            statusText = "Анализ..."
+            statusText = "OpenCV: выравнивание и анализ..."
             statusColor = Color.Yellow
             defectRegions = emptyList()
 
             scope.launch {
-                val defects = withContext(Dispatchers.Default) {
-                    detectDefects(referenceBitmap, captured)
+                val result = withContext(Dispatchers.Default) {
+                    OpenCvInspector.inspect(referenceBitmap, captured)
                 }
-                defectRegions = defects
+                defectRegions = result.defects
                 isAnalyzing = false
-
-                if (defects.isEmpty()) {
-                    statusText = "✓ Брак не обнаружен"
-                    statusColor = Color(0xFF4CAF50)
-                } else {
-                    statusText = "⚠ Найдено зон: ${defects.size}"
-                    statusColor = Color.Red
+                statusText = result.message
+                statusColor = if (result.defects.isEmpty()) Color(0xFF4CAF50) else Color.Red
+                if (result.defects.isNotEmpty()) {
                     playDefectSound()
                 }
             }

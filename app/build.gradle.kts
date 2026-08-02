@@ -13,10 +13,15 @@ android {
         applicationId = "com.elks.aoi"
         minSdk = 26
         targetSdk = 35
-        versionCode = 2
-        versionName = "0.2.0-mvp"
+        versionCode = 3
+        versionName = "0.3.0-opencv"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        ndk {
+            // OpenCV native libs — arm64 primary for modern phones (Xiaomi 14T Pro)
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a")
+        }
     }
 
     buildTypes {
@@ -43,6 +48,12 @@ android {
 
     buildFeatures {
         compose = true
+    }
+
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+        }
     }
 }
 
@@ -80,6 +91,9 @@ dependencies {
 
     // Coil for images
     implementation("io.coil-kt:coil-compose:2.6.0")
+
+    // OpenCV (Maven Central official package)
+    implementation("org.opencv:opencv:4.9.0")
 
     // Debug
     debugImplementation("androidx.compose.ui:ui-tooling")
