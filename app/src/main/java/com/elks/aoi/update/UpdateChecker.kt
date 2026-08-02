@@ -83,22 +83,19 @@ object UpdateChecker {
             for (i in 0 until assets.length()) {
                 val a = assets.getJSONObject(i)
                 val name = a.optString("name", "")
-                // Prefer direct APK
                 if (name.endsWith(".apk", ignoreCase = true)) {
                     apkUrl = a.optString("browser_download_url", null)
                     break
                 }
             }
-            // Fallback: zip that likely contains apk (old manual uploads)
             if (apkUrl == null) {
                 for (i in 0 until assets.length()) {
                     val a = assets.getJSONObject(i)
                     val name = a.optString("name", "")
                     if (name.endsWith(".zip", ignoreCase = true) &&
-                        name.contains("apk", ignoreCase = true) ||
-                        name.contains("AOI", ignoreCase = true)
+                        (name.contains("apk", ignoreCase = true) ||
+                            name.contains("AOI", ignoreCase = true))
                     ) {
-                        // Still not installable as APK; skip for auto-install
                         Log.w(TAG, "Found zip asset but need .apk for auto-update: $name")
                     }
                 }
@@ -160,14 +157,16 @@ object UpdateChecker {
 
     fun enqueueDownload(context: Context, apkUrl: String, version: String): Long {
         val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+        // Always force .apk in the filename — MIUI/Xiaomi sometimes drops the extension
+        // when using only setTitle() or when Content-Disposition is ambiguous.
+        val safeName = "AOI-Elks-v${normalizeVersion(version)}.apk"
         val req = DownloadManager.Request(Uri.parse(apkUrl)).apply {
-            setTitle("AOI Elks $version")
-            setDescription("Загрузка обновления")
+            setTitle(safeName)
+            setDescription("Загрузка обновления AOI Elks")
+            setMimeType("application/vnd.android.package-archive")
             setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-            setDestinationInExternalPublicDir(
-                Environment.DIRECTORY_DOWNLOADS,
-                "AOI-Elks-$version.apk"
-            )
+            setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, safeName)
+            addRequestHeader("Accept", "application/vnd.android.package-archive,*/*")
             setAllowedOverMetered(true)
             setAllowedOverRoaming(true)
         }
