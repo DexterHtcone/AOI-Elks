@@ -2,7 +2,7 @@
 <resources>
     <string name="app_name">AOI Elks</string>
     <string name="main_title">AOI Elks</string>
-    <string name="main_subtitle">Инспекция СМД-монтажа платы Эл242</string>
+    <string name="main_subtitle">Инспекция СМД-монтажа печатных плат</string>
     <string name="btn_start_inspection">Начать проверку</string>
     <string name="btn_calibration">Калибровка эталона</string>
     <string name="btn_history">История</string>

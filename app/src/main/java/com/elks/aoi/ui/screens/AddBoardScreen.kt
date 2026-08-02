@@ -95,7 +95,7 @@ fun AddBoardScreen(
                         value = name,
                         onValueChange = { name = it },
                         label = { Text("Название платы *") },
-                        placeholder = { Text("например: Элекс242 ОД2503") },
+                        placeholder = { Text("например: Плата управления v2") },
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true
                     )
