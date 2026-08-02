@@ -7,6 +7,9 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     name: Build Debug APK
@@ -27,30 +30,65 @@ jobs:
         run: |
           if [ -f ./gradlew ]; then
             chmod +x ./gradlew
-          else
-            echo "gradlew not found yet — will be generated"
           fi
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
 
+      - name: Extract version from build.gradle.kts
+        id: ver
+        run: |
+          VERSION=$(grep -E 'versionName\s*=' app/build.gradle.kts | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+          CODE=$(grep -E 'versionCode\s*=' app/build.gradle.kts | head -1 | sed -E 's/[^0-9]//g')
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "code=$CODE" >> $GITHUB_OUTPUT
+          echo "Resolved versionName=$VERSION versionCode=$CODE"
+
       - name: Build Debug APK
         run: |
-          # Generate wrapper if missing
           if [ ! -f ./gradlew ]; then
             gradle wrapper --gradle-version 8.9
             chmod +x ./gradlew
           fi
           ./gradlew assembleDebug --stacktrace
 
+      - name: Prepare APK for release
+        id: apk
+        run: |
+          SRC=$(find app/build/outputs/apk/debug -name "*.apk" | head -1)
+          if [ -z "$SRC" ]; then
+            echo "APK not found"
+            exit 1
+          fi
+          OUT="AOI-Elks-v${{ steps.ver.outputs.version }}.apk"
+          cp "$SRC" "$OUT"
+          echo "path=$OUT" >> $GITHUB_OUTPUT
+          ls -lh "$OUT"
+
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: AOI-Elks-debug
-          path: app/build/outputs/apk/debug/*.apk
+          path: ${{ steps.apk.outputs.path }}
           retention-days: 30
 
-      - name: List outputs
-        run: |
-          echo "=== Build outputs ==="
-          find app/build/outputs -name "*.apk" -o -name "*.aab" 2>/dev/null || echo "No APK found"
+      # Release only on push to main (not on PR)
+      - name: Create / update GitHub Release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.ver.outputs.version }}
+          name: AOI Elks ${{ steps.ver.outputs.version }}
+          body: |
+            Автоматический релиз из GitHub Actions.
+
+            **Версия:** ${{ steps.ver.outputs.version }} (code ${{ steps.ver.outputs.code }})
+            **Commit:** ${{ github.sha }}
+            **Run:** ${{ github.run_number }}
+
+            Установка: скачайте APK → разрешите установку из неизвестных источников → установите.
+          files: ${{ steps.apk.outputs.path }}
+          make_latest: true
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
