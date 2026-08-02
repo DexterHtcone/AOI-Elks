@@ -6,6 +6,7 @@ import com.elks.aoi.AoiApplication
 import com.elks.aoi.camera.DefectRegion
 import org.opencv.android.Utils
 import org.opencv.core.Core
+import org.opencv.core.CvType
 import org.opencv.core.DMatch
 import org.opencv.core.Mat
 import org.opencv.core.MatOfDMatch
@@ -22,29 +23,53 @@ import org.opencv.calib3d.Calib3d
 import kotlin.math.abs
 import kotlin.math.min
 
+/**
+ * Verdict for control equipment: doubt must never look like PASS.
+ * Review K-2 (fail-unsafe) — P0 fix.
+ */
+enum class InspectVerdict {
+    /** Analysis completed, no defects above threshold. */
+    PASS,
+    /** Analysis completed, defects found. */
+    FAIL,
+    /** Alignment or scene unreliable — operator must reshoot. */
+    UNRELIABLE
+}
+
 object OpenCvInspector {
 
     private const val TAG = "OpenCvInspector"
     private const val WORK_W = 640
     private const val WORK_H = 480
     private const val MIN_GOOD_MATCHES = 12
+    private const val MIN_INLIERS = 20
+    private const val MIN_INLIER_RATIO = 0.35
     private const val GRID_X = 12
     private const val GRID_Y = 10
-    private const val BORDER_SKIP = 1
     private const val DEFAULT_THRESHOLD = 0.20f
+    /** Fraction of cells flagged → scene mismatch, not component defects. */
     private const val MAX_DEFECT_FRACTION = 0.35f
 
     data class Result(
         val defects: List<DefectRegion>,
+        val verdict: InspectVerdict,
         val aligned: Boolean,
         val matchCount: Int,
+        val inlierCount: Int,
         val message: String
     )
 
     fun inspect(reference: Bitmap, captured: Bitmap, threshold: Float = DEFAULT_THRESHOLD): Result {
         if (!AoiApplication.openCvReady) {
-            Log.w(TAG, "OpenCV not ready — fallback")
-            return fallback(reference, captured, threshold)
+            Log.w(TAG, "OpenCV not ready")
+            return Result(
+                emptyList(),
+                InspectVerdict.UNRELIABLE,
+                false,
+                0,
+                0,
+                "⚠ OpenCV не готов — повторите съёмку"
+            )
         }
 
         var refMat: Mat? = null
@@ -66,7 +91,6 @@ object OpenCvInspector {
             Imgproc.cvtColor(refMat, refGray, Imgproc.COLOR_BGR2GRAY)
             Imgproc.cvtColor(capMat, capGray, Imgproc.COLOR_BGR2GRAY)
 
-            // CLAHE — выравнивает локальный контраст, меньше ложных браков из-за бликов/тени
             val clahe: CLAHE = Imgproc.createCLAHE(2.0, Size(8.0, 8.0))
             clahe.apply(refGray, refGray)
             clahe.apply(capGray, capGray)
@@ -80,7 +104,7 @@ object OpenCvInspector {
             orb.detectAndCompute(capGray, Mat(), kpCap, descCap)
 
             if (descRef.empty() || descCap.empty()) {
-                return fallback(reference, captured, threshold)
+                return unreliable("Нет признаков для выравнивания — повторите съёмку")
             }
 
             val matcher = BFMatcher.create(Core.NORM_HAMMING, false)
@@ -98,17 +122,15 @@ object OpenCvInspector {
             val matchCount = good.size
             Log.i(TAG, "Good matches: $matchCount")
 
+            // K-2: no alignment → UNRELIABLE, never PASS
             if (matchCount < MIN_GOOD_MATCHES) {
-                val defects = zoneDiff(refGray, capGray, threshold)
-                val filtered = filterAndCap(defects)
                 return Result(
-                    filtered,
+                    emptyList(),
+                    InspectVerdict.UNRELIABLE,
                     false,
                     matchCount,
-                    if (filtered.isEmpty())
-                        "Мало совпадений ($matchCount) — брак не найден"
-                    else
-                        "Мало совпадений ($matchCount) — зон: ${filtered.size}"
+                    0,
+                    "⚠ Мало совпадений ($matchCount) — повторите съёмку (ракурс/расстояние)"
                 )
             }
 
@@ -123,11 +145,46 @@ object OpenCvInspector {
 
             val srcMat = MatOfPoint2f(*srcPts.toTypedArray())
             val dstMat = MatOfPoint2f(*dstPts.toTypedArray())
-            val mask = Mat()
-            val H = Calib3d.findHomography(srcMat, dstMat, Calib3d.RANSAC, 4.0, mask)
+            val ransacMask = Mat()
+            val H = Calib3d.findHomography(srcMat, dstMat, Calib3d.RANSAC, 2.0, ransacMask)
 
             if (H.empty()) {
-                return fallback(reference, captured, threshold)
+                ransacMask.release()
+                srcMat.release()
+                dstMat.release()
+                return unreliable("Гомография не найдена — повторите съёмку")
+            }
+
+            // Count RANSAC inliers (review §5)
+            var inliers = 0
+            if (!ransacMask.empty() && ransacMask.rows() > 0) {
+                for (i in 0 until ransacMask.rows()) {
+                    if (ransacMask.get(i, 0)[0] != 0.0) inliers++
+                }
+            }
+            val inlierRatio = if (matchCount > 0) inliers.toDouble() / matchCount else 0.0
+
+            if (inliers < MIN_INLIERS || inlierRatio < MIN_INLIER_RATIO) {
+                H.release()
+                ransacMask.release()
+                srcMat.release()
+                dstMat.release()
+                return Result(
+                    emptyList(),
+                    InspectVerdict.UNRELIABLE,
+                    false,
+                    matchCount,
+                    inliers,
+                    "⚠ Слабое выравнивание (inliers $inliers / $matchCount) — повторите съёмку"
+                )
+            }
+
+            if (!isHomographyPlausible(H)) {
+                H.release()
+                ransacMask.release()
+                srcMat.release()
+                dstMat.release()
+                return unreliable("Искажённая геометрия — повторите съёмку")
             }
 
             warped = Mat()
@@ -139,49 +196,82 @@ object OpenCvInspector {
                 Scalar(0.0)
             )
 
+            // K-3: geometric validity mask (warp of ones), NOT brightness threshold
+            val ones = Mat(WORK_H, WORK_W, CvType.CV_8UC1, Scalar(255.0))
+            val geoMask = Mat()
+            Imgproc.warpPerspective(
+                ones, geoMask, H,
+                Size(WORK_W.toDouble(), WORK_H.toDouble()),
+                Imgproc.INTER_NEAREST,
+                Core.BORDER_CONSTANT,
+                Scalar(0.0)
+            )
+            // Erode slightly to drop partial border pixels from interpolation
+            val erodeK = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, Size(3.0, 3.0))
+            Imgproc.erode(geoMask, geoMask, erodeK)
+
             diff = Mat()
             Core.absdiff(refGray, warped, diff)
-
-            val warpMask = Mat()
-            Imgproc.threshold(warped, warpMask, 12.0, 255.0, Imgproc.THRESH_BINARY)
-            Core.bitwise_and(diff, warpMask, diff)
+            Core.bitwise_and(diff, geoMask, diff)
 
             val kernel = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, Size(3.0, 3.0))
             Imgproc.morphologyEx(diff, diff, Imgproc.MORPH_OPEN, kernel)
             Imgproc.morphologyEx(diff, diff, Imgproc.MORPH_CLOSE, kernel)
 
             val raw = zoneDiff(diff, null, threshold, isDiffMap = true)
-            val defects = filterAndCap(raw)
+            // K-4: no BORDER_SKIP, no silent take(12) — show all zones
+            val defects = raw
 
+            ones.release()
+            geoMask.release()
+            erodeK.release()
             descRef.release()
             descCap.release()
             kpRef.release()
             kpCap.release()
             srcMat.release()
             dstMat.release()
-            mask.release()
+            ransacMask.release()
             H.release()
-            warpMask.release()
             kernel.release()
 
-            val msg = when {
-                raw.size > (GRID_X * GRID_Y * MAX_DEFECT_FRACTION).toInt() ->
-                    "⚠ Слишком много отличий ($matchCount совп.) — проверьте ракурс/эталон"
-                defects.isEmpty() ->
-                    "✓ Выровнено ($matchCount совп.) — брак не найден"
-                else ->
-                    "⚠ Выровнено ($matchCount совп.) — зон брака: ${defects.size}"
+            val cellCount = GRID_X * GRID_Y
+            val tooMany = raw.size > (cellCount * MAX_DEFECT_FRACTION).toInt()
+
+            // K-2: scene mismatch → UNRELIABLE, never green PASS
+            if (tooMany) {
+                return Result(
+                    emptyList(),
+                    InspectVerdict.UNRELIABLE,
+                    true,
+                    matchCount,
+                    inliers,
+                    "⚠ Слишком много отличий ($matchCount совп.) — ракурс/эталон не совпали, повторите"
+                )
             }
 
-            return Result(
-                defects = if (raw.size > (GRID_X * GRID_Y * MAX_DEFECT_FRACTION).toInt()) emptyList() else defects,
-                aligned = true,
-                matchCount = matchCount,
-                message = msg
-            )
+            return if (defects.isEmpty()) {
+                Result(
+                    emptyList(),
+                    InspectVerdict.PASS,
+                    true,
+                    matchCount,
+                    inliers,
+                    "✓ Годен ($matchCount совп., $inliers inliers) — крупных отличий нет"
+                )
+            } else {
+                Result(
+                    defects,
+                    InspectVerdict.FAIL,
+                    true,
+                    matchCount,
+                    inliers,
+                    "⚠ Брак: зон ${defects.size} ($matchCount совп., $inliers inliers)"
+                )
+            }
         } catch (e: Exception) {
             Log.e(TAG, "OpenCV inspect failed", e)
-            return fallback(reference, captured, threshold)
+            return unreliable("Ошибка анализа: ${e.message ?: "unknown"}")
         } finally {
             refMat?.release()
             capMat?.release()
@@ -192,16 +282,39 @@ object OpenCvInspector {
         }
     }
 
-    private fun filterAndCap(raw: List<DefectRegion>): List<DefectRegion> {
-        val cellW = 1f / GRID_X
-        val cellH = 1f / GRID_Y
-        val filtered = raw.filter { r ->
-            val gx = ((r.left + r.right) / 2f / cellW).toInt()
-            val gy = ((r.top + r.bottom) / 2f / cellH).toInt()
-            gx in BORDER_SKIP until (GRID_X - BORDER_SKIP) &&
-                gy in BORDER_SKIP until (GRID_Y - BORDER_SKIP)
+    private fun unreliable(msg: String) = Result(
+        emptyList(), InspectVerdict.UNRELIABLE, false, 0, 0, msg
+    )
+
+    /** Basic geometric sanity on H (review §5). */
+    private fun isHomographyPlausible(H: Mat): Boolean {
+        try {
+            val det = H.get(0, 0)[0] * H.get(1, 1)[0] - H.get(0, 1)[0] * H.get(1, 0)[0]
+            if (abs(det) < 0.05 || abs(det) > 20.0) return false
+            // Map corners of work image and check scale roughly
+            val corners = arrayOf(
+                Point(0.0, 0.0),
+                Point(WORK_W.toDouble(), 0.0),
+                Point(WORK_W.toDouble(), WORK_H.toDouble()),
+                Point(0.0, WORK_H.toDouble())
+            )
+            val src = MatOfPoint2f(*corners)
+            val dst = MatOfPoint2f()
+            Core.perspectiveTransform(src, dst, H)
+            val pts = dst.toArray()
+            src.release()
+            dst.release()
+            if (pts.size != 4) return false
+            // Width of top edge after transform
+            val w = kotlin.math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y)
+            val h = kotlin.math.hypot(pts[3].x - pts[0].x, pts[3].y - pts[0].y)
+            val scaleW = w / WORK_W
+            val scaleH = h / WORK_H
+            if (scaleW !in 0.5..1.8 || scaleH !in 0.5..1.8) return false
+            return true
+        } catch (_: Exception) {
+            return false
         }
-        return filtered.take(16)
     }
 
     private fun zoneDiff(
@@ -249,64 +362,6 @@ object OpenCvInspector {
                 }
             }
         }
-        return defects
-    }
-
-    private fun fallback(reference: Bitmap, captured: Bitmap, threshold: Float): Result {
-        val defects = filterAndCap(simpleZoneCompare(reference, captured, threshold))
-        return Result(
-            defects = defects,
-            aligned = false,
-            matchCount = 0,
-            message = if (defects.isEmpty())
-                "✓ Брак не обнаружен (без выравнивания)"
-            else
-                "⚠ Найдено зон: ${defects.size} (без выравнивания)"
-        )
-    }
-
-    private fun simpleZoneCompare(reference: Bitmap, captured: Bitmap, threshold: Float): List<DefectRegion> {
-        val defects = mutableListOf<DefectRegion>()
-        val refScaled = Bitmap.createScaledBitmap(reference, WORK_W, WORK_H, true)
-        val capScaled = Bitmap.createScaledBitmap(captured, WORK_W, WORK_H, true)
-        val cellW = WORK_W / GRID_X
-        val cellH = WORK_H / GRID_Y
-
-        for (gy in 0 until GRID_Y) {
-            for (gx in 0 until GRID_X) {
-                var diffSum = 0.0
-                var count = 0
-                val x0 = gx * cellW
-                val y0 = gy * cellH
-                for (y in y0 until min(y0 + cellH, WORK_H)) {
-                    for (x in x0 until min(x0 + cellW, WORK_W)) {
-                        val p1 = refScaled.getPixel(x, y)
-                        val p2 = capScaled.getPixel(x, y)
-                        val l1 = 0.299 * ((p1 shr 16) and 0xFF) +
-                            0.587 * ((p1 shr 8) and 0xFF) +
-                            0.114 * (p1 and 0xFF)
-                        val l2 = 0.299 * ((p2 shr 16) and 0xFF) +
-                            0.587 * ((p2 shr 8) and 0xFF) +
-                            0.114 * (p2 and 0xFF)
-                        diffSum += abs(l1 - l2)
-                        count++
-                    }
-                }
-                val avg = if (count > 0) (diffSum / count) / 255.0 else 0.0
-                if (avg > threshold) {
-                    defects.add(
-                        DefectRegion(
-                            left = gx.toFloat() / GRID_X,
-                            top = gy.toFloat() / GRID_Y,
-                            right = (gx + 1).toFloat() / GRID_X,
-                            bottom = (gy + 1).toFloat() / GRID_Y
-                        )
-                    )
-                }
-            }
-        }
-        refScaled.recycle()
-        capScaled.recycle()
         return defects
     }
 

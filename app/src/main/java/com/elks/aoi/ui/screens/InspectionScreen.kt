@@ -10,6 +10,7 @@ import androidx.compose.ui.unit.dp
 import com.elks.aoi.camera.*
 import com.elks.aoi.data.BoardEntity
 import com.elks.aoi.data.BoardRepository
+import com.elks.aoi.vision.InspectVerdict
 import com.elks.aoi.vision.OpenCvInspector
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -33,7 +34,6 @@ fun InspectionScreen(
         repository.loadBitmap(board.referenceImagePath)
     }
 
-    // Frame aspect = эталон (width/height) — рамка на экране совпадает с формой платы
     val frameAspect = remember(referenceBitmap) {
         val bmp = referenceBitmap
         if (bmp != null && bmp.height > 0) bmp.width.toFloat() / bmp.height.toFloat()
@@ -77,9 +77,20 @@ fun InspectionScreen(
                 defectRegions = result.defects
                 isAnalyzing = false
                 statusText = result.message
-                statusColor = if (result.defects.isEmpty()) Color(0xFF4CAF50) else Color.Red
-                if (result.defects.isNotEmpty()) {
-                    playDefectSound()
+
+                // K-2: three-state signalling — never paint UNRELIABLE as green
+                when (result.verdict) {
+                    InspectVerdict.PASS -> {
+                        statusColor = Color(0xFF4CAF50)
+                    }
+                    InspectVerdict.FAIL -> {
+                        statusColor = Color.Red
+                        playDefectSound()
+                    }
+                    InspectVerdict.UNRELIABLE -> {
+                        statusColor = Color(0xFFFFC107) // amber
+                        playRetrySound()
+                    }
                 }
             }
         },

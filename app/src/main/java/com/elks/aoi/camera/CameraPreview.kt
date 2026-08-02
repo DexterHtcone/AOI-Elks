@@ -65,10 +65,6 @@ data class FrameAnalysis(
     val centered: Boolean
 )
 
-/**
- * Guidance frame sized to match the reference board aspect ratio (width/height).
- * Fits the largest rectangle of that aspect inside the screen with margins.
- */
 fun guidanceFrameRect(
     screenW: Float,
     screenH: Float,
@@ -97,7 +93,6 @@ fun CameraCaptureScreen(
     statusText: String? = null,
     statusColor: Color = Color.White,
     autoCaptureWhenReady: Boolean = false,
-    /** width/height of the board reference — drives green frame shape */
     frameAspectRatio: Float = 1.6f
 ) {
     val context = LocalContext.current
@@ -124,7 +119,6 @@ fun CameraCaptureScreen(
         }
     }
 
-    // Auto-capture: need several consecutive OK frames + cooldown after last shot
     LaunchedEffect(guidance.hint, autoCaptureWhenReady, isCapturing) {
         if (!autoCaptureWhenReady || isCapturing) return@LaunchedEffect
         if (guidance.hint == GuidanceHint.OK) {
@@ -165,7 +159,7 @@ fun CameraCaptureScreen(
                     }
 
                     val capture = ImageCapture.Builder()
-                        .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
+                        .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
                         .build()
                     imageCapture = capture
 
@@ -568,5 +562,13 @@ fun playDefectSound() {
     try {
         val toneGen = ToneGenerator(AudioManager.STREAM_ALARM, 90)
         toneGen.startTone(ToneGenerator.TONE_CDMA_ALERT_CALL_GUARD, 500)
+    } catch (_: Exception) {}
+}
+
+/** Distinct tone for UNRELIABLE / retry (review K-2). */
+fun playRetrySound() {
+    try {
+        val toneGen = ToneGenerator(AudioManager.STREAM_NOTIFICATION, 80)
+        toneGen.startTone(ToneGenerator.TONE_PROP_BEEP2, 350)
     } catch (_: Exception) {}
 }
