@@ -13,13 +13,27 @@ android {
         applicationId = "com.elks.aoi"
         minSdk = 26
         targetSdk = 35
-        versionCode = 7
-        versionName = "0.3.4"
+        versionCode = 8
+        versionName = "0.3.5"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         ndk {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a")
+        }
+    }
+
+    // Fixed debug keystore so every CI build has the same signature
+    // (otherwise Android refuses update: "conflicts with another package")
+    signingConfigs {
+        create("ciDebug") {
+            val ks = rootProject.file("keystore/aoi-elks-debug.jks")
+            if (ks.exists()) {
+                storeFile = ks
+                storePassword = "aoielksdebug"
+                keyAlias = "aoielks"
+                keyPassword = "aoielksdebug"
+            }
         }
     }
 
@@ -33,6 +47,10 @@ android {
         }
         debug {
             isDebuggable = true
+            val ks = rootProject.file("keystore/aoi-elks-debug.jks")
+            if (ks.exists()) {
+                signingConfig = signingConfigs.getByName("ciDebug")
+            }
         }
     }
 

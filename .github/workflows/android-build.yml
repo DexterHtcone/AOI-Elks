@@ -19,6 +19,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Decode fixed debug keystore
+        run: |
+          mkdir -p keystore
+          base64 -d keystore/aoi-elks-debug.jks.b64 > keystore/aoi-elks-debug.jks
+          ls -la keystore/
+
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
@@ -72,7 +78,6 @@ jobs:
           path: ${{ steps.apk.outputs.path }}
           retention-days: 30
 
-      # Release only on push to main (not on PR)
       - name: Create / update GitHub Release
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
@@ -80,13 +85,15 @@ jobs:
           tag_name: v${{ steps.ver.outputs.version }}
           name: AOI Elks ${{ steps.ver.outputs.version }}
           body: |
-            Автоматический релиз из GitHub Actions.
+            Автоматический релиз из GitHub Actions (фиксированная debug-подпись).
 
             **Версия:** ${{ steps.ver.outputs.version }} (code ${{ steps.ver.outputs.code }})
             **Commit:** ${{ github.sha }}
             **Run:** ${{ github.run_number }}
 
-            Установка: скачайте APK → разрешите установку из неизвестных источников → установите.
+            Если установка пишет «конфликтует с другим пакетом» — удалите старое
+            приложение один раз, затем ставьте этот APK. Дальше обновления будут
+            ставиться поверх.
           files: ${{ steps.apk.outputs.path }}
           make_latest: true
           fail_on_unmatched_files: true
