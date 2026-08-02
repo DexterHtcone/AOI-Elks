@@ -1,0 +1,56 @@
+name: Android Build
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build Debug APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'gradle'
+
+      - name: Grant execute permission for gradlew
+        run: |
+          if [ -f ./gradlew ]; then
+            chmod +x ./gradlew
+          else
+            echo "gradlew not found yet — will be generated"
+          fi
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build Debug APK
+        run: |
+          # Generate wrapper if missing
+          if [ ! -f ./gradlew ]; then
+            gradle wrapper --gradle-version 8.9
+            chmod +x ./gradlew
+          fi
+          ./gradlew assembleDebug --stacktrace
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AOI-Elks-debug
+          path: app/build/outputs/apk/debug/*.apk
+          retention-days: 30
+
+      - name: List outputs
+        run: |
+          echo "=== Build outputs ==="
+          find app/build/outputs -name "*.apk" -o -name "*.aab" 2>/dev/null || echo "No APK found"
