@@ -33,6 +33,13 @@ fun InspectionScreen(
         repository.loadBitmap(board.referenceImagePath)
     }
 
+    // Frame aspect = эталон (width/height) — рамка на экране совпадает с формой платы
+    val frameAspect = remember(referenceBitmap) {
+        val bmp = referenceBitmap
+        if (bmp != null && bmp.height > 0) bmp.width.toFloat() / bmp.height.toFloat()
+        else 1.6f
+    }
+
     if (!hasCameraPermission) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -81,6 +88,7 @@ fun InspectionScreen(
         defectRegions = defectRegions,
         statusText = statusText,
         statusColor = statusColor,
-        autoCaptureWhenReady = false
+        autoCaptureWhenReady = true,
+        frameAspectRatio = frameAspect
     )
 }

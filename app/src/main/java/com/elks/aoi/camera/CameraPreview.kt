@@ -42,6 +42,7 @@ import kotlinx.coroutines.launch
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.abs
 import kotlin.math.min
 
@@ -64,12 +65,26 @@ data class FrameAnalysis(
     val centered: Boolean
 )
 
-/** Same geometry as GuidanceOverlay — defects are drawn inside this frame. */
-fun guidanceFrameRect(screenW: Float, screenH: Float): androidx.compose.ui.geometry.Rect {
-    val frameW = screenW * 0.88f
-    val frameH = screenH * 0.52f
-    val left = (screenW - frameW) / 2
-    val top = (screenH - frameH) / 2 - 30f
+/**
+ * Guidance frame sized to match the reference board aspect ratio (width/height).
+ * Fits the largest rectangle of that aspect inside the screen with margins.
+ */
+fun guidanceFrameRect(
+    screenW: Float,
+    screenH: Float,
+    aspectRatio: Float = 1.6f
+): androidx.compose.ui.geometry.Rect {
+    val aspect = aspectRatio.coerceIn(0.4f, 3.5f)
+    val maxW = screenW * 0.92f
+    val maxH = screenH * 0.58f
+    var frameW = maxW
+    var frameH = frameW / aspect
+    if (frameH > maxH) {
+        frameH = maxH
+        frameW = frameH * aspect
+    }
+    val left = (screenW - frameW) / 2f
+    val top = (screenH - frameH) / 2f - screenH * 0.03f
     return androidx.compose.ui.geometry.Rect(left, top, left + frameW, top + frameH)
 }
 
@@ -81,7 +96,9 @@ fun CameraCaptureScreen(
     defectRegions: List<DefectRegion> = emptyList(),
     statusText: String? = null,
     statusColor: Color = Color.White,
-    autoCaptureWhenReady: Boolean = false
+    autoCaptureWhenReady: Boolean = false,
+    /** width/height of the board reference — drives green frame shape */
+    frameAspectRatio: Float = 1.6f
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -94,6 +111,8 @@ fun CameraCaptureScreen(
 
     val analyzing = remember { AtomicBoolean(false) }
     val lastAnalyzeMs = remember { java.util.concurrent.atomic.AtomicLong(0L) }
+    val okStreak = remember { AtomicInteger(0) }
+    val lastAutoCaptureMs = remember { java.util.concurrent.atomic.AtomicLong(0L) }
 
     LaunchedEffect(camera) {
         camera?.let { cam ->
@@ -105,12 +124,24 @@ fun CameraCaptureScreen(
         }
     }
 
-    LaunchedEffect(guidance.hint, autoCaptureWhenReady) {
-        if (autoCaptureWhenReady && guidance.hint == GuidanceHint.OK && !isCapturing) {
-            kotlinx.coroutines.delay(600)
-            if (guidance.hint == GuidanceHint.OK && !isCapturing) {
-                triggerCapture(imageCapture, scope, onCapture) { isCapturing = it }
+    // Auto-capture: need several consecutive OK frames + cooldown after last shot
+    LaunchedEffect(guidance.hint, autoCaptureWhenReady, isCapturing) {
+        if (!autoCaptureWhenReady || isCapturing) return@LaunchedEffect
+        if (guidance.hint == GuidanceHint.OK) {
+            val streak = okStreak.incrementAndGet()
+            if (streak >= 3) {
+                val now = System.currentTimeMillis()
+                if (now - lastAutoCaptureMs.get() > 4500L) {
+                    lastAutoCaptureMs.set(now)
+                    okStreak.set(0)
+                    kotlinx.coroutines.delay(350)
+                    if (guidance.hint == GuidanceHint.OK && !isCapturing) {
+                        triggerCapture(imageCapture, scope, onCapture) { isCapturing = it }
+                    }
+                }
             }
+        } else {
+            okStreak.set(0)
         }
     }
 
@@ -145,7 +176,7 @@ fun CameraCaptureScreen(
 
                     analysis.setAnalyzer(Executors.newSingleThreadExecutor()) { imageProxy ->
                         val now = System.currentTimeMillis()
-                        if (now - lastAnalyzeMs.get() < 250 || analyzing.get()) {
+                        if (now - lastAnalyzeMs.get() < 200 || analyzing.get()) {
                             imageProxy.close()
                             return@setAnalyzer
                         }
@@ -184,19 +215,17 @@ fun CameraCaptureScreen(
             modifier = Modifier.fillMaxSize()
         )
 
-        GuidanceOverlay(guidance = guidance)
+        GuidanceOverlay(guidance = guidance, aspectRatio = frameAspectRatio)
 
-        // Defect rectangles — only inside the green guidance frame
         if (defectRegions.isNotEmpty()) {
             Canvas(modifier = Modifier.fillMaxSize()) {
-                val frame = guidanceFrameRect(size.width, size.height)
+                val frame = guidanceFrameRect(size.width, size.height, frameAspectRatio)
                 clipRect(frame.left, frame.top, frame.right, frame.bottom) {
                     defectRegions.forEach { r ->
                         val l = frame.left + r.left * frame.width
                         val t = frame.top + r.top * frame.height
                         val w = (r.right - r.left) * frame.width
                         val h = (r.bottom - r.top) * frame.height
-                        // Filled translucent + stroke for visibility
                         drawRect(
                             color = Color.Red.copy(alpha = 0.28f),
                             topLeft = Offset(l, t),
@@ -266,11 +295,14 @@ fun CameraCaptureScreen(
         }
 
         val hintLabel = when (guidance.hint) {
-            GuidanceHint.OK -> "✓ Готово — можно снимать"
+            GuidanceHint.OK -> if (autoCaptureWhenReady)
+                "✓ Держите ровно — съёмка автоматически"
+            else
+                "✓ Готово — можно снимать"
             GuidanceHint.TOO_DARK -> "Слишком темно — подождите авто-подстройку"
             GuidanceHint.TOO_BRIGHT -> "Слишком ярко — чуть отдалите или смените угол"
-            GuidanceHint.MOVE_CLOSER -> "Приблизьте телефон к плате"
-            GuidanceHint.MOVE_FARTHER -> "Отдалите телефон от платы"
+            GuidanceHint.MOVE_CLOSER -> "Приблизьте: плата должна заполнить рамку"
+            GuidanceHint.MOVE_FARTHER -> "Отдалите: плата выходит за рамку"
             GuidanceHint.CENTER_BOARD -> "Сместите плату в центр рамки"
             GuidanceHint.HOLD_STEADY -> "Держите телефон ровно"
         }
@@ -306,15 +338,16 @@ fun CameraCaptureScreen(
                 .navigationBarsPadding()
                 .padding(bottom = 28.dp)
         ) {
-            val ready = guidance.hint == GuidanceHint.OK || !autoCaptureWhenReady
             FloatingActionButton(
                 onClick = {
                     if (isCapturing) return@FloatingActionButton
+                    okStreak.set(0)
+                    lastAutoCaptureMs.set(System.currentTimeMillis())
                     triggerCapture(imageCapture, scope, onCapture) { isCapturing = it }
                 },
                 modifier = Modifier.size(72.dp),
                 shape = CircleShape,
-                containerColor = if (ready) MaterialTheme.colorScheme.primary else Color.Gray
+                containerColor = MaterialTheme.colorScheme.primary
             ) {
                 if (isCapturing) {
                     CircularProgressIndicator(color = Color.White, modifier = Modifier.size(32.dp))
@@ -327,9 +360,9 @@ fun CameraCaptureScreen(
 }
 
 @Composable
-fun GuidanceOverlay(guidance: FrameAnalysis) {
+fun GuidanceOverlay(guidance: FrameAnalysis, aspectRatio: Float = 1.6f) {
     Canvas(modifier = Modifier.fillMaxSize()) {
-        val frame = guidanceFrameRect(size.width, size.height)
+        val frame = guidanceFrameRect(size.width, size.height, aspectRatio)
         val left = frame.left
         val top = frame.top
         val frameW = frame.width
@@ -341,10 +374,10 @@ fun GuidanceOverlay(guidance: FrameAnalysis) {
             else -> Color(0xFFFF9800)
         }
 
-        drawRect(Color.Black.copy(alpha = 0.32f), Offset.Zero, Size(size.width, top))
-        drawRect(Color.Black.copy(alpha = 0.32f), Offset(0f, top + frameH), Size(size.width, size.height - top - frameH))
-        drawRect(Color.Black.copy(alpha = 0.32f), Offset(0f, top), Size(left, frameH))
-        drawRect(Color.Black.copy(alpha = 0.32f), Offset(left + frameW, top), Size(size.width - left - frameW, frameH))
+        drawRect(Color.Black.copy(alpha = 0.35f), Offset.Zero, Size(size.width, top))
+        drawRect(Color.Black.copy(alpha = 0.35f), Offset(0f, top + frameH), Size(size.width, size.height - top - frameH))
+        drawRect(Color.Black.copy(alpha = 0.35f), Offset(0f, top), Size(left, frameH))
+        drawRect(Color.Black.copy(alpha = 0.35f), Offset(left + frameW, top), Size(size.width - left - frameW, frameH))
 
         drawRect(color = frameColor, topLeft = Offset(left, top), size = Size(frameW, frameH), style = Stroke(width = 5f))
 

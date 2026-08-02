@@ -16,6 +16,7 @@ import org.opencv.core.Scalar
 import org.opencv.core.Size
 import org.opencv.features2d.BFMatcher
 import org.opencv.features2d.ORB
+import org.opencv.imgproc.CLAHE
 import org.opencv.imgproc.Imgproc
 import org.opencv.calib3d.Calib3d
 import kotlin.math.abs
@@ -26,13 +27,11 @@ object OpenCvInspector {
     private const val TAG = "OpenCvInspector"
     private const val WORK_W = 640
     private const val WORK_H = 480
-    private const val MIN_GOOD_MATCHES = 15
-    private const val GRID_X = 10
-    private const val GRID_Y = 8
-    /** Border cells ignored (warp / FOV artifacts). */
+    private const val MIN_GOOD_MATCHES = 12
+    private const val GRID_X = 12
+    private const val GRID_Y = 10
     private const val BORDER_SKIP = 1
-    private const val DEFAULT_THRESHOLD = 0.22f
-    /** If more than this fraction of cells are "defects" — scene mismatch, not real defects. */
+    private const val DEFAULT_THRESHOLD = 0.20f
     private const val MAX_DEFECT_FRACTION = 0.35f
 
     data class Result(
@@ -67,7 +66,12 @@ object OpenCvInspector {
             Imgproc.cvtColor(refMat, refGray, Imgproc.COLOR_BGR2GRAY)
             Imgproc.cvtColor(capMat, capGray, Imgproc.COLOR_BGR2GRAY)
 
-            val orb = ORB.create(1500)
+            // CLAHE — выравнивает локальный контраст, меньше ложных браков из-за бликов/тени
+            val clahe: CLAHE = Imgproc.createCLAHE(2.0, Size(8.0, 8.0))
+            clahe.apply(refGray, refGray)
+            clahe.apply(capGray, capGray)
+
+            val orb = ORB.create(2000)
             val kpRef = MatOfKeyPoint()
             val kpCap = MatOfKeyPoint()
             val descRef = Mat()
@@ -120,7 +124,7 @@ object OpenCvInspector {
             val srcMat = MatOfPoint2f(*srcPts.toTypedArray())
             val dstMat = MatOfPoint2f(*dstPts.toTypedArray())
             val mask = Mat()
-            val H = Calib3d.findHomography(srcMat, dstMat, Calib3d.RANSAC, 5.0, mask)
+            val H = Calib3d.findHomography(srcMat, dstMat, Calib3d.RANSAC, 4.0, mask)
 
             if (H.empty()) {
                 return fallback(reference, captured, threshold)
@@ -142,7 +146,7 @@ object OpenCvInspector {
             Imgproc.threshold(warped, warpMask, 12.0, 255.0, Imgproc.THRESH_BINARY)
             Core.bitwise_and(diff, warpMask, diff)
 
-            val kernel = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, Size(5.0, 5.0))
+            val kernel = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, Size(3.0, 3.0))
             Imgproc.morphologyEx(diff, diff, Imgproc.MORPH_OPEN, kernel)
             Imgproc.morphologyEx(diff, diff, Imgproc.MORPH_CLOSE, kernel)
 
@@ -188,7 +192,6 @@ object OpenCvInspector {
         }
     }
 
-    /** Drop border cells and cap count for clean UI. */
     private fun filterAndCap(raw: List<DefectRegion>): List<DefectRegion> {
         val cellW = 1f / GRID_X
         val cellH = 1f / GRID_Y
@@ -198,8 +201,7 @@ object OpenCvInspector {
             gx in BORDER_SKIP until (GRID_X - BORDER_SKIP) &&
                 gy in BORDER_SKIP until (GRID_Y - BORDER_SKIP)
         }
-        // Cap to avoid flooding UI
-        return filtered.take(12)
+        return filtered.take(16)
     }
 
     private fun zoneDiff(

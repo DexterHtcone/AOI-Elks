@@ -13,8 +13,8 @@ android {
         applicationId = "com.elks.aoi"
         minSdk = 26
         targetSdk = 35
-        versionCode = 8
-        versionName = "0.3.5"
+        versionCode = 9
+        versionName = "0.3.6"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -23,8 +23,6 @@ android {
         }
     }
 
-    // Fixed debug keystore so every CI build has the same signature
-    // (otherwise Android refuses update: "conflicts with another package")
     signingConfigs {
         create("ciDebug") {
             val ks = rootProject.file("keystore/aoi-elks-debug.jks")
