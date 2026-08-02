@@ -21,27 +21,19 @@ import org.opencv.calib3d.Calib3d
 import kotlin.math.abs
 import kotlin.math.min
 
-/**
- * OpenCV-based AOI inspector.
- *
- * Pipeline:
- * 1. Scale both images to working resolution
- * 2. ORB feature detection + matching
- * 3. Homography (RANSAC) → warp captured onto reference
- * 4. Absolute difference + morphological cleanup
- * 5. Grid analysis → defect regions
- *
- * Falls back to simple zone comparison if OpenCV unavailable or alignment fails.
- */
 object OpenCvInspector {
 
     private const val TAG = "OpenCvInspector"
     private const val WORK_W = 640
     private const val WORK_H = 480
-    private const val MIN_GOOD_MATCHES = 12
+    private const val MIN_GOOD_MATCHES = 15
     private const val GRID_X = 10
     private const val GRID_Y = 8
-    private const val DEFAULT_THRESHOLD = 0.14 // mean abs-diff / 255
+    /** Border cells ignored (warp / FOV artifacts). */
+    private const val BORDER_SKIP = 1
+    private const val DEFAULT_THRESHOLD = 0.22f
+    /** If more than this fraction of cells are "defects" — scene mismatch, not real defects. */
+    private const val MAX_DEFECT_FRACTION = 0.35f
 
     data class Result(
         val defects: List<DefectRegion>,
@@ -50,7 +42,7 @@ object OpenCvInspector {
         val message: String
     )
 
-    fun inspect(reference: Bitmap, captured: Bitmap, threshold: Float = DEFAULT_THRESHOLD.toFloat()): Result {
+    fun inspect(reference: Bitmap, captured: Bitmap, threshold: Float = DEFAULT_THRESHOLD): Result {
         if (!AoiApplication.openCvReady) {
             Log.w(TAG, "OpenCV not ready — fallback")
             return fallback(reference, captured, threshold)
@@ -84,7 +76,6 @@ object OpenCvInspector {
             orb.detectAndCompute(capGray, Mat(), kpCap, descCap)
 
             if (descRef.empty() || descCap.empty()) {
-                Log.w(TAG, "No descriptors — fallback")
                 return fallback(reference, captured, threshold)
             }
 
@@ -104,13 +95,16 @@ object OpenCvInspector {
             Log.i(TAG, "Good matches: $matchCount")
 
             if (matchCount < MIN_GOOD_MATCHES) {
-                Log.w(TAG, "Too few matches ($matchCount) — fallback without alignment")
                 val defects = zoneDiff(refGray, capGray, threshold)
+                val filtered = filterAndCap(defects)
                 return Result(
-                    defects,
+                    filtered,
                     false,
                     matchCount,
-                    "Мало совпадений ($matchCount) — сравнение без выравнивания"
+                    if (filtered.isEmpty())
+                        "Мало совпадений ($matchCount) — брак не найден"
+                    else
+                        "Мало совпадений ($matchCount) — зон: ${filtered.size}"
                 )
             }
 
@@ -129,7 +123,6 @@ object OpenCvInspector {
             val H = Calib3d.findHomography(srcMat, dstMat, Calib3d.RANSAC, 5.0, mask)
 
             if (H.empty()) {
-                Log.w(TAG, "Homography failed — fallback")
                 return fallback(reference, captured, threshold)
             }
 
@@ -146,14 +139,15 @@ object OpenCvInspector {
             Core.absdiff(refGray, warped, diff)
 
             val warpMask = Mat()
-            Imgproc.threshold(warped, warpMask, 8.0, 255.0, Imgproc.THRESH_BINARY)
+            Imgproc.threshold(warped, warpMask, 12.0, 255.0, Imgproc.THRESH_BINARY)
             Core.bitwise_and(diff, warpMask, diff)
 
-            val kernel = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, Size(3.0, 3.0))
+            val kernel = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, Size(5.0, 5.0))
             Imgproc.morphologyEx(diff, diff, Imgproc.MORPH_OPEN, kernel)
             Imgproc.morphologyEx(diff, diff, Imgproc.MORPH_CLOSE, kernel)
 
-            val defects = zoneDiff(diff, null, threshold, isDiffMap = true)
+            val raw = zoneDiff(diff, null, threshold, isDiffMap = true)
+            val defects = filterAndCap(raw)
 
             descRef.release()
             descCap.release()
@@ -166,14 +160,17 @@ object OpenCvInspector {
             warpMask.release()
             kernel.release()
 
-            val msg = if (defects.isEmpty()) {
-                "✓ Выровнено ($matchCount совп.) — брак не найден"
-            } else {
-                "⚠ Выровнено ($matchCount совп.) — зон брака: ${defects.size}"
+            val msg = when {
+                raw.size > (GRID_X * GRID_Y * MAX_DEFECT_FRACTION).toInt() ->
+                    "⚠ Слишком много отличий ($matchCount совп.) — проверьте ракурс/эталон"
+                defects.isEmpty() ->
+                    "✓ Выровнено ($matchCount совп.) — брак не найден"
+                else ->
+                    "⚠ Выровнено ($matchCount совп.) — зон брака: ${defects.size}"
             }
 
             return Result(
-                defects = defects,
+                defects = if (raw.size > (GRID_X * GRID_Y * MAX_DEFECT_FRACTION).toInt()) emptyList() else defects,
                 aligned = true,
                 matchCount = matchCount,
                 message = msg
@@ -189,6 +186,20 @@ object OpenCvInspector {
             warped?.release()
             diff?.release()
         }
+    }
+
+    /** Drop border cells and cap count for clean UI. */
+    private fun filterAndCap(raw: List<DefectRegion>): List<DefectRegion> {
+        val cellW = 1f / GRID_X
+        val cellH = 1f / GRID_Y
+        val filtered = raw.filter { r ->
+            val gx = ((r.left + r.right) / 2f / cellW).toInt()
+            val gy = ((r.top + r.bottom) / 2f / cellH).toInt()
+            gx in BORDER_SKIP until (GRID_X - BORDER_SKIP) &&
+                gy in BORDER_SKIP until (GRID_Y - BORDER_SKIP)
+        }
+        // Cap to avoid flooding UI
+        return filtered.take(12)
     }
 
     private fun zoneDiff(
@@ -240,7 +251,7 @@ object OpenCvInspector {
     }
 
     private fun fallback(reference: Bitmap, captured: Bitmap, threshold: Float): Result {
-        val defects = simpleZoneCompare(reference, captured, threshold)
+        val defects = filterAndCap(simpleZoneCompare(reference, captured, threshold))
         return Result(
             defects = defects,
             aligned = false,

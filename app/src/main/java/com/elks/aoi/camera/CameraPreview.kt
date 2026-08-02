@@ -28,6 +28,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
@@ -42,7 +43,6 @@ import java.io.ByteArrayOutputStream
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.abs
-import kotlin.math.max
 import kotlin.math.min
 
 data class DefectRegion(val left: Float, val top: Float, val right: Float, val bottom: Float)
@@ -59,10 +59,19 @@ enum class GuidanceHint {
 
 data class FrameAnalysis(
     val hint: GuidanceHint,
-    val brightness: Float,      // 0..1
-    val fillRatio: Float,       // estimated board fill 0..1
+    val brightness: Float,
+    val fillRatio: Float,
     val centered: Boolean
 )
+
+/** Same geometry as GuidanceOverlay — defects are drawn inside this frame. */
+fun guidanceFrameRect(screenW: Float, screenH: Float): androidx.compose.ui.geometry.Rect {
+    val frameW = screenW * 0.88f
+    val frameH = screenH * 0.52f
+    val left = (screenW - frameW) / 2
+    val top = (screenH - frameH) / 2 - 30f
+    return androidx.compose.ui.geometry.Rect(left, top, left + frameW, top + frameH)
+}
 
 @Composable
 fun CameraCaptureScreen(
@@ -86,7 +95,6 @@ fun CameraCaptureScreen(
     val analyzing = remember { AtomicBoolean(false) }
     val lastAnalyzeMs = remember { java.util.concurrent.atomic.AtomicLong(0L) }
 
-    // Always enable torch when camera is ready
     LaunchedEffect(camera) {
         camera?.let { cam ->
             try {
@@ -97,7 +105,6 @@ fun CameraCaptureScreen(
         }
     }
 
-    // Auto-capture when positioning is OK
     LaunchedEffect(guidance.hint, autoCaptureWhenReady) {
         if (autoCaptureWhenReady && guidance.hint == GuidanceHint.OK && !isCapturing) {
             kotlinx.coroutines.delay(600)
@@ -131,7 +138,6 @@ fun CameraCaptureScreen(
                         .build()
                     imageCapture = capture
 
-                    // Continuous analysis for guidance
                     val analysis = ImageAnalysis.Builder()
                         .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                         .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_YUV_420_888)
@@ -146,9 +152,7 @@ fun CameraCaptureScreen(
                         lastAnalyzeMs.set(now)
                         analyzing.set(true)
                         try {
-                            val result = analyzeFrame(imageProxy)
-                            // Update on main via atomic + recomposition trigger
-                            guidance = result
+                            guidance = analyzeFrame(imageProxy)
                         } catch (_: Exception) {
                         } finally {
                             analyzing.set(false)
@@ -165,7 +169,6 @@ fun CameraCaptureScreen(
                             capture,
                             analysis
                         )
-                        // Auto torch
                         camera?.let { cam ->
                             if (cam.cameraInfo.hasFlashUnit()) {
                                 cam.cameraControl.enableTorch(true)
@@ -181,27 +184,35 @@ fun CameraCaptureScreen(
             modifier = Modifier.fillMaxSize()
         )
 
-        // Graphical guidance overlay
         GuidanceOverlay(guidance = guidance)
 
-        // Defect red rectangles
+        // Defect rectangles — only inside the green guidance frame
         if (defectRegions.isNotEmpty()) {
             Canvas(modifier = Modifier.fillMaxSize()) {
-                defectRegions.forEach { r ->
-                    drawRect(
-                        color = Color.Red.copy(alpha = 0.75f),
-                        topLeft = Offset(r.left * size.width, r.top * size.height),
-                        size = Size(
-                            (r.right - r.left) * size.width,
-                            (r.bottom - r.top) * size.height
-                        ),
-                        style = Stroke(width = 7f)
-                    )
+                val frame = guidanceFrameRect(size.width, size.height)
+                clipRect(frame.left, frame.top, frame.right, frame.bottom) {
+                    defectRegions.forEach { r ->
+                        val l = frame.left + r.left * frame.width
+                        val t = frame.top + r.top * frame.height
+                        val w = (r.right - r.left) * frame.width
+                        val h = (r.bottom - r.top) * frame.height
+                        // Filled translucent + stroke for visibility
+                        drawRect(
+                            color = Color.Red.copy(alpha = 0.28f),
+                            topLeft = Offset(l, t),
+                            size = Size(w, h)
+                        )
+                        drawRect(
+                            color = Color.Red.copy(alpha = 0.95f),
+                            topLeft = Offset(l, t),
+                            size = Size(w, h),
+                            style = Stroke(width = 5f)
+                        )
+                    }
                 }
             }
         }
 
-        // Top bar — only close button
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -219,7 +230,6 @@ fun CameraCaptureScreen(
             }
         }
 
-        // Title + status
         Column(
             modifier = Modifier
                 .align(Alignment.TopCenter)
@@ -245,16 +255,16 @@ fun CameraCaptureScreen(
                 Text(
                     statusText,
                     color = statusColor,
-                    fontSize = 16.sp,
+                    fontSize = 15.sp,
                     fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center,
                     modifier = Modifier
-                        .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(8.dp))
-                        .padding(horizontal = 14.dp, vertical = 6.dp)
+                        .background(Color.Black.copy(alpha = 0.65f), RoundedCornerShape(8.dp))
+                        .padding(horizontal = 14.dp, vertical = 8.dp)
                 )
             }
         }
 
-        // Hint banner at bottom (above capture button)
         val hintLabel = when (guidance.hint) {
             GuidanceHint.OK -> "✓ Готово — можно снимать"
             GuidanceHint.TOO_DARK -> "Слишком темно — подождите авто-подстройку"
@@ -290,7 +300,6 @@ fun CameraCaptureScreen(
             )
         }
 
-        // Capture button — only active when OK (or always for calibration)
         Box(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
@@ -305,21 +314,12 @@ fun CameraCaptureScreen(
                 },
                 modifier = Modifier.size(72.dp),
                 shape = CircleShape,
-                containerColor = if (ready) MaterialTheme.colorScheme.primary
-                else Color.Gray
+                containerColor = if (ready) MaterialTheme.colorScheme.primary else Color.Gray
             ) {
                 if (isCapturing) {
-                    CircularProgressIndicator(
-                        color = Color.White,
-                        modifier = Modifier.size(32.dp)
-                    )
+                    CircularProgressIndicator(color = Color.White, modifier = Modifier.size(32.dp))
                 } else {
-                    Icon(
-                        Icons.Default.Camera,
-                        contentDescription = "Снять",
-                        modifier = Modifier.size(36.dp),
-                        tint = Color.White
-                    )
+                    Icon(Icons.Default.Camera, contentDescription = "Снять", modifier = Modifier.size(36.dp), tint = Color.White)
                 }
             }
         }
@@ -329,10 +329,11 @@ fun CameraCaptureScreen(
 @Composable
 fun GuidanceOverlay(guidance: FrameAnalysis) {
     Canvas(modifier = Modifier.fillMaxSize()) {
-        val frameW = size.width * 0.88f
-        val frameH = size.height * 0.52f
-        val left = (size.width - frameW) / 2
-        val top = (size.height - frameH) / 2 - 30f
+        val frame = guidanceFrameRect(size.width, size.height)
+        val left = frame.left
+        val top = frame.top
+        val frameW = frame.width
+        val frameH = frame.height
 
         val frameColor = when (guidance.hint) {
             GuidanceHint.OK -> Color(0xFF4CAF50)
@@ -340,29 +341,13 @@ fun GuidanceOverlay(guidance: FrameAnalysis) {
             else -> Color(0xFFFF9800)
         }
 
-        // Dim outside frame
         drawRect(Color.Black.copy(alpha = 0.32f), Offset.Zero, Size(size.width, top))
-        drawRect(
-            Color.Black.copy(alpha = 0.32f),
-            Offset(0f, top + frameH),
-            Size(size.width, size.height - top - frameH)
-        )
+        drawRect(Color.Black.copy(alpha = 0.32f), Offset(0f, top + frameH), Size(size.width, size.height - top - frameH))
         drawRect(Color.Black.copy(alpha = 0.32f), Offset(0f, top), Size(left, frameH))
-        drawRect(
-            Color.Black.copy(alpha = 0.32f),
-            Offset(left + frameW, top),
-            Size(size.width - left - frameW, frameH)
-        )
+        drawRect(Color.Black.copy(alpha = 0.32f), Offset(left + frameW, top), Size(size.width - left - frameW, frameH))
 
-        // Frame
-        drawRect(
-            color = frameColor,
-            topLeft = Offset(left, top),
-            size = Size(frameW, frameH),
-            style = Stroke(width = 5f)
-        )
+        drawRect(color = frameColor, topLeft = Offset(left, top), size = Size(frameW, frameH), style = Stroke(width = 5f))
 
-        // Corners
         val c = 48f
         val sw = 10f
         drawLine(Color.White, Offset(left, top), Offset(left + c, top), sw)
@@ -377,24 +362,20 @@ fun GuidanceOverlay(guidance: FrameAnalysis) {
         val cx = size.width / 2
         val cy = top + frameH / 2
 
-        // Directional arrows based on hint
         when (guidance.hint) {
             GuidanceHint.MOVE_CLOSER -> {
-                // Four arrows pointing inward
-                drawArrow(Offset(cx, top + 30f), 0f, Color.White)      // down
-                drawArrow(Offset(cx, top + frameH - 30f), 180f, Color.White) // up
-                drawArrow(Offset(left + 40f, cy), 90f, Color.White)     // right
-                drawArrow(Offset(left + frameW - 40f, cy), 270f, Color.White) // left
+                drawArrow(Offset(cx, top + 30f), 0f, Color.White)
+                drawArrow(Offset(cx, top + frameH - 30f), 180f, Color.White)
+                drawArrow(Offset(left + 40f, cy), 90f, Color.White)
+                drawArrow(Offset(left + frameW - 40f, cy), 270f, Color.White)
             }
             GuidanceHint.MOVE_FARTHER -> {
-                // Four arrows pointing outward
                 drawArrow(Offset(cx, top + 30f), 180f, Color.White)
                 drawArrow(Offset(cx, top + frameH - 30f), 0f, Color.White)
                 drawArrow(Offset(left + 40f, cy), 270f, Color.White)
                 drawArrow(Offset(left + frameW - 40f, cy), 90f, Color.White)
             }
             GuidanceHint.CENTER_BOARD -> {
-                // Crosshair center
                 drawLine(Color.White.copy(alpha = 0.7f), Offset(cx - 30f, cy), Offset(cx + 30f, cy), 3f)
                 drawLine(Color.White.copy(alpha = 0.7f), Offset(cx, cy - 30f), Offset(cx, cy + 30f), 3f)
             }
@@ -419,10 +400,6 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawArrow(
     }
 }
 
-/**
- * Analyze YUV frame for brightness and approximate fill/centering.
- * Heuristic without OpenCV — good enough for operator guidance.
- */
 fun analyzeFrame(image: ImageProxy): FrameAnalysis {
     val yPlane = image.planes[0]
     val yBuffer = yPlane.buffer
@@ -431,14 +408,10 @@ fun analyzeFrame(image: ImageProxy): FrameAnalysis {
     val width = image.width
     val height = image.height
 
-    // Sample every Nth pixel for speed
     val step = 8
     var sum = 0L
     var count = 0
-    var edgeSum = 0L
-    var edgeCount = 0
 
-    // Center region vs border
     val cx0 = width / 4
     val cx1 = width * 3 / 4
     val cy0 = height / 4
@@ -447,6 +420,8 @@ fun analyzeFrame(image: ImageProxy): FrameAnalysis {
     var centerCount = 0
     var borderSum = 0L
     var borderCount = 0
+    var edgeSum = 0L
+    var edgeCount = 0
 
     var y = 0
     while (y < height) {
@@ -457,7 +432,6 @@ fun analyzeFrame(image: ImageProxy): FrameAnalysis {
                 val v = yBuffer.get(idx).toInt() and 0xFF
                 sum += v
                 count++
-
                 val inCenter = x in cx0 until cx1 && y in cy0 until cy1
                 if (inCenter) {
                     centerSum += v
@@ -466,8 +440,6 @@ fun analyzeFrame(image: ImageProxy): FrameAnalysis {
                     borderSum += v
                     borderCount++
                 }
-
-                // Simple horizontal gradient as edge proxy
                 if (x + step < width) {
                     val idx2 = y * rowStride + (x + step) * pixelStride
                     if (idx2 < yBuffer.capacity()) {
@@ -486,12 +458,8 @@ fun analyzeFrame(image: ImageProxy): FrameAnalysis {
     val centerBright = if (centerCount > 0) (centerSum.toFloat() / centerCount) / 255f else 0.5f
     val borderBright = if (borderCount > 0) (borderSum.toFloat() / borderCount) / 255f else 0.5f
     val edgeDensity = if (edgeCount > 0) (edgeSum.toFloat() / edgeCount) / 255f else 0f
-
-    // fillRatio heuristic: more edges + contrast between center and border ≈ board present
     val contrast = abs(centerBright - borderBright)
     val fillRatio = min(1f, edgeDensity * 4f + contrast * 2f)
-
-    // Centering: if center is significantly different from border, board is likely centered
     val centered = contrast > 0.05f && edgeDensity > 0.04f
 
     val hint = when {
@@ -534,7 +502,6 @@ private fun triggerCapture(
 }
 
 fun imageProxyToBitmap(image: ImageProxy): Bitmap {
-    // Prefer JPEG if available
     if (image.format == ImageFormat.JPEG) {
         val buffer = image.planes[0].buffer
         val bytes = ByteArray(buffer.remaining())
@@ -544,7 +511,6 @@ fun imageProxyToBitmap(image: ImageProxy): Bitmap {
         return Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
     }
 
-    // YUV → NV21 → JPEG → Bitmap
     val yBuffer = image.planes[0].buffer
     val uBuffer = image.planes[1].buffer
     val vBuffer = image.planes[2].buffer
@@ -563,54 +529,6 @@ fun imageProxyToBitmap(image: ImageProxy): Bitmap {
     val bitmap = BitmapFactory.decodeByteArray(jpegBytes, 0, jpegBytes.size)
     val matrix = Matrix().apply { postRotate(image.imageInfo.rotationDegrees.toFloat()) }
     return Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
-}
-
-fun detectDefects(reference: Bitmap, captured: Bitmap, threshold: Float = 0.18f): List<DefectRegion> {
-    val gridX = 8
-    val gridY = 6
-    val defects = mutableListOf<DefectRegion>()
-
-    val refScaled = Bitmap.createScaledBitmap(reference, 320, 240, true)
-    val capScaled = Bitmap.createScaledBitmap(captured, 320, 240, true)
-
-    val cellW = refScaled.width / gridX
-    val cellH = refScaled.height / gridY
-
-    for (gy in 0 until gridY) {
-        for (gx in 0 until gridX) {
-            var diffSum = 0.0
-            var count = 0
-            val x0 = gx * cellW
-            val y0 = gy * cellH
-
-            for (y in y0 until min(y0 + cellH, refScaled.height)) {
-                for (x in x0 until min(x0 + cellW, refScaled.width)) {
-                    val p1 = refScaled.getPixel(x, y)
-                    val p2 = capScaled.getPixel(x, y)
-                    val l1 = 0.299 * ((p1 shr 16) and 0xFF) + 0.587 * ((p1 shr 8) and 0xFF) + 0.114 * (p1 and 0xFF)
-                    val l2 = 0.299 * ((p2 shr 16) and 0xFF) + 0.587 * ((p2 shr 8) and 0xFF) + 0.114 * (p2 and 0xFF)
-                    diffSum += abs(l1 - l2)
-                    count++
-                }
-            }
-
-            val avgDiff = if (count > 0) (diffSum / count) / 255.0 else 0.0
-            if (avgDiff > threshold) {
-                defects.add(
-                    DefectRegion(
-                        left = gx.toFloat() / gridX,
-                        top = gy.toFloat() / gridY,
-                        right = (gx + 1).toFloat() / gridX,
-                        bottom = (gy + 1).toFloat() / gridY
-                    )
-                )
-            }
-        }
-    }
-
-    refScaled.recycle()
-    capScaled.recycle()
-    return defects
 }
 
 fun playDefectSound() {
