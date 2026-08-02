@@ -9,12 +9,12 @@
 
     <application
         android:allowBackup="true"
-        android:icon="@drawable/ic_launcher_foreground"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:label="@string/app_name"
-        android:roundIcon="@drawable/ic_launcher_foreground"
         android:supportsRtl="true"
         android:theme="@style/Theme.AOIElks">
-        
+
         <activity
             android:name=".MainActivity"
             android:exported="true"
