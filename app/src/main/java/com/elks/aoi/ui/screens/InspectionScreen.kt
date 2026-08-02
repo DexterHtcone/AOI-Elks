@@ -1,6 +1,5 @@
 package com.elks.aoi.ui.screens
 
-import android.graphics.Bitmap
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -23,7 +22,6 @@ fun InspectionScreen(
     onRequestPermission: () -> Unit,
     onBack: () -> Unit
 ) {
-    var isFlashOn by remember { mutableStateOf(true) } // по умолчанию включаем фонарик
     var defectRegions by remember { mutableStateOf<List<DefectRegion>>(emptyList()) }
     var statusText by remember { mutableStateOf<String?>(null) }
     var statusColor by remember { mutableStateOf(Color.White) }
@@ -57,8 +55,6 @@ fun InspectionScreen(
     }
 
     CameraCaptureScreen(
-        isFlashOn = isFlashOn,
-        onFlashToggle = { isFlashOn = !isFlashOn },
         onCapture = { captured ->
             if (isAnalyzing) return@CameraCaptureScreen
             isAnalyzing = true
@@ -84,9 +80,10 @@ fun InspectionScreen(
             }
         },
         onBack = onBack,
-        guidanceText = "${board.name}\nДержите плату ровно в рамке • Приблизьте / отдалите",
+        titleText = board.name,
         defectRegions = defectRegions,
         statusText = statusText,
-        statusColor = statusColor
+        statusColor = statusColor,
+        autoCaptureWhenReady = false
     )
 }

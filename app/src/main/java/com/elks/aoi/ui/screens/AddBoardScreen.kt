@@ -12,7 +12,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.elks.aoi.camera.CameraCaptureScreen
@@ -28,11 +27,10 @@ fun AddBoardScreen(
     onBack: () -> Unit,
     onSaved: () -> Unit
 ) {
-    var step by remember { mutableStateOf(0) } // 0=camera, 1=name
+    var step by remember { mutableStateOf(0) }
     var capturedBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var name by remember { mutableStateOf("") }
     var description by remember { mutableStateOf("") }
-    var isFlashOn by remember { mutableStateOf(false) }
     var isSaving by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
@@ -51,14 +49,13 @@ fun AddBoardScreen(
     when (step) {
         0 -> {
             CameraCaptureScreen(
-                isFlashOn = isFlashOn,
-                onFlashToggle = { isFlashOn = !isFlashOn },
                 onCapture = { bmp ->
                     capturedBitmap = bmp
                     step = 1
                 },
                 onBack = onBack,
-                guidanceText = "Сфотографируйте ИСПРАВНУЮ плату (эталон)\nВключите фонарик при плохом свете"
+                titleText = "Эталон: сфотографируйте ИСПРАВНУЮ плату",
+                autoCaptureWhenReady = false
             )
         }
 

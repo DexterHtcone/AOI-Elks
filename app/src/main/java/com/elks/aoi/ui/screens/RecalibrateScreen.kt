@@ -21,7 +21,6 @@ fun RecalibrateScreen(
     onBack: () -> Unit,
     onSaved: () -> Unit
 ) {
-    var isFlashOn by remember { mutableStateOf(true) }
     var statusText by remember { mutableStateOf<String?>(null) }
     var isSaving by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
@@ -39,8 +38,6 @@ fun RecalibrateScreen(
     }
 
     CameraCaptureScreen(
-        isFlashOn = isFlashOn,
-        onFlashToggle = { isFlashOn = !isFlashOn },
         onCapture = { bmp ->
             if (isSaving) return@CameraCaptureScreen
             isSaving = true
@@ -52,8 +49,9 @@ fun RecalibrateScreen(
             }
         },
         onBack = onBack,
-        guidanceText = "Перекалибровка: ${board.name}\nСфотографируйте исправную плату заново",
+        titleText = "Перекалибровка: ${board.name}",
         statusText = statusText,
-        statusColor = Color.Yellow
+        statusColor = Color.Yellow,
+        autoCaptureWhenReady = false
     )
 }
