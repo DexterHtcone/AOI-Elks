@@ -31,7 +31,8 @@ fun CatalogScreen(
     hasCameraPermission: Boolean,
     onRequestPermission: () -> Unit,
     onAddBoard: () -> Unit,
-    onBoardClick: (BoardEntity) -> Unit
+    onBoardClick: (BoardEntity) -> Unit,
+    onAbout: () -> Unit = {}
 ) {
     val boards by repository.getAllBoards().collectAsState(initial = emptyList())
 
@@ -46,6 +47,11 @@ fun CatalogScreen(
                             fontSize = 12.sp,
                             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                         )
+                    }
+                },
+                actions = {
+                    IconButton(onClick = onAbout) {
+                        Icon(Icons.Default.Info, contentDescription = "О приложении / обновления")
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(

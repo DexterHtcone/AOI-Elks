@@ -11,7 +11,8 @@ enum class Screen {
     AddBoard,
     BoardDetail,
     Inspection,
-    Recalibrate
+    Recalibrate,
+    About
 }
 
 @Composable
@@ -34,7 +35,8 @@ fun AOIApp(
             onBoardClick = { board ->
                 selectedBoard = board
                 currentScreen = Screen.BoardDetail
-            }
+            },
+            onAbout = { currentScreen = Screen.About }
         )
 
         Screen.AddBoard -> AddBoardScreen(
@@ -98,5 +100,9 @@ fun AOIApp(
                 currentScreen = Screen.Catalog
             }
         }
+
+        Screen.About -> AboutScreen(
+            onBack = { currentScreen = Screen.Catalog }
+        )
     }
 }

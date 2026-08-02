@@ -6,7 +6,6 @@ import com.elks.aoi.AoiApplication
 import com.elks.aoi.camera.DefectRegion
 import org.opencv.android.Utils
 import org.opencv.core.Core
-import org.opencv.core.CvType
 import org.opencv.core.DMatch
 import org.opencv.core.Mat
 import org.opencv.core.MatOfDMatch
@@ -20,7 +19,6 @@ import org.opencv.features2d.ORB
 import org.opencv.imgproc.Imgproc
 import org.opencv.calib3d.Calib3d
 import kotlin.math.abs
-import kotlin.math.max
 import kotlin.math.min
 
 /**
@@ -66,7 +64,6 @@ object OpenCvInspector {
         var diff: Mat? = null
 
         try {
-            // --- 1. Bitmap → Mat (RGBA) → BGR, scale ---
             refMat = bitmapToBgr(reference)
             capMat = bitmapToBgr(captured)
 
@@ -78,7 +75,6 @@ object OpenCvInspector {
             Imgproc.cvtColor(refMat, refGray, Imgproc.COLOR_BGR2GRAY)
             Imgproc.cvtColor(capMat, capGray, Imgproc.COLOR_BGR2GRAY)
 
-            // --- 2. ORB features ---
             val orb = ORB.create(1500)
             val kpRef = MatOfKeyPoint()
             val kpCap = MatOfKeyPoint()
@@ -92,7 +88,6 @@ object OpenCvInspector {
                 return fallback(reference, captured, threshold)
             }
 
-            // --- 3. Match + Lowe ratio ---
             val matcher = BFMatcher.create(Core.NORM_HAMMING, false)
             val knn = ArrayList<MatOfDMatch>()
             matcher.knnMatch(descCap, descRef, knn, 2)
@@ -105,15 +100,20 @@ object OpenCvInspector {
                 }
             }
 
-            Log.i(TAG, "Good matches: ${good.size}")
+            val matchCount = good.size
+            Log.i(TAG, "Good matches: $matchCount")
 
-            if (good.size < MIN_GOOD_MATCHES) {
-                Log.w(TAG, "Too few matches (${good.size}) — fallback without alignment")
+            if (matchCount < MIN_GOOD_MATCHES) {
+                Log.w(TAG, "Too few matches ($matchCount) — fallback without alignment")
                 val defects = zoneDiff(refGray, capGray, threshold)
-                return Result(defects, false, good.size, "Мало совпадений (${good.size}) — сравнение без выравнивания")
+                return Result(
+                    defects,
+                    false,
+                    matchCount,
+                    "Мало совпадений ($matchCount) — сравнение без выравнивания"
+                )
             }
 
-            // --- 4. Homography ---
             val srcPts = ArrayList<Point>()
             val dstPts = ArrayList<Point>()
             val kpCapArr = kpCap.toArray()
@@ -133,7 +133,6 @@ object OpenCvInspector {
                 return fallback(reference, captured, threshold)
             }
 
-            // --- 5. Warp captured onto reference ---
             warped = Mat()
             Imgproc.warpPerspective(
                 capGray, warped, H,
@@ -143,11 +142,9 @@ object OpenCvInspector {
                 Scalar(0.0)
             )
 
-            // --- 6. Absolute difference + morphology ---
             diff = Mat()
             Core.absdiff(refGray, warped, diff)
 
-            // Suppress very dark borders from warp (where warp filled with 0)
             val warpMask = Mat()
             Imgproc.threshold(warped, warpMask, 8.0, 255.0, Imgproc.THRESH_BINARY)
             Core.bitwise_and(diff, warpMask, diff)
@@ -169,14 +166,17 @@ object OpenCvInspector {
             warpMask.release()
             kernel.release()
 
+            val msg = if (defects.isEmpty()) {
+                "✓ Выровнено ($matchCount совп.) — брак не найден"
+            } else {
+                "⚠ Выровнено ($matchCount совп.) — зон брака: ${defects.size}"
+            }
+
             return Result(
                 defects = defects,
                 aligned = true,
-                matchCount = good.size,
-                message = if (defects.isEmpty())
-                    "✓ Выровнено ($good.size совп.) — брак не найден"
-                else
-                    "⚠ Выровнено ($good.size совп.) — зон брака: ${defects.size}"
+                matchCount = matchCount,
+                message = msg
             )
         } catch (e: Exception) {
             Log.e(TAG, "OpenCV inspect failed", e)
@@ -191,7 +191,6 @@ object OpenCvInspector {
         }
     }
 
-    /** Zone mean on grayscale or precomputed diff map. */
     private fun zoneDiff(
         a: Mat,
         b: Mat?,
@@ -212,16 +211,15 @@ object OpenCvInspector {
                 val roiA = a.submat(y0, y1, x0, x1)
 
                 val meanVal: Double = if (isDiffMap || b == null) {
-                    val m = Core.mean(roiA)
-                    m.`val`[0]
+                    Core.mean(roiA).`val`[0]
                 } else {
                     val roiB = b.submat(y0, y1, x0, x1)
                     val tmp = Mat()
                     Core.absdiff(roiA, roiB, tmp)
-                    val m = Core.mean(tmp)
+                    val m = Core.mean(tmp).`val`[0]
                     tmp.release()
                     roiB.release()
-                    m.`val`[0]
+                    m
                 }
                 roiA.release()
 
@@ -242,7 +240,6 @@ object OpenCvInspector {
     }
 
     private fun fallback(reference: Bitmap, captured: Bitmap, threshold: Float): Result {
-        // Pure Kotlin grid (same as before OpenCV)
         val defects = simpleZoneCompare(reference, captured, threshold)
         return Result(
             defects = defects,
