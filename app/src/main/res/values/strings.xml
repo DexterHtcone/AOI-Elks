@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">AOI Elks</string>
+    <string name="main_title">AOI Elks</string>
+    <string name="main_subtitle">Инспекция СМД-монтажа платы Эл242</string>
+    <string name="btn_start_inspection">Начать проверку</string>
+    <string name="btn_calibration">Калибровка эталона</string>
+    <string name="btn_history">История</string>
+    <string name="btn_settings">Настройки</string>
+    <string name="permission_camera_required">Для работы приложения необходим доступ к камере</string>
+    <string name="torch_on">Фонарик включён</string>
+    <string name="torch_off">Фонарик выключен</string>
+    <string name="hint_rotate">Поверните телефон</string>
+    <string name="hint_tilt">Выровняйте наклон</string>
+    <string name="hint_zoom_in">Приблизьте</string>
+    <string name="hint_zoom_out">Отдалите</string>
+    <string name="hint_lighting">Улучшите освещение или включите фонарик</string>
+    <string name="defect_detected">Обнаружен брак!</string>
+    <string name="status_ok">Плата в норме</string>
+</resources>
