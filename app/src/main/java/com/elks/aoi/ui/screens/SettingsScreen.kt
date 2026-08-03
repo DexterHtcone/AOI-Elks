@@ -6,6 +6,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Straighten
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -21,7 +22,8 @@ import com.elks.aoi.settings.WorkResolution
 @Composable
 fun SettingsScreen(
     settings: AppSettings,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    onScaleCalibration: () -> Unit = {}
 ) {
     Scaffold(
         topBar = {
@@ -56,6 +58,27 @@ fun SettingsScreen(
             }
             SwitchRow("Графические подсказки", "Рамка и стрелки позиционирования", settings.guidanceOverlay) {
                 settings.setGuidanceOverlay(it)
+            }
+
+            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+            SectionTitle("Масштаб (мм/px)")
+
+            val scaleLabel = if (settings.mmPerPixel > 0f)
+                String.format("%.5f мм/px", settings.mmPerPixel)
+            else
+                "не задан"
+            Text(
+                "Текущий: $scaleLabel",
+                fontSize = 13.sp,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+            )
+            OutlinedButton(
+                onClick = onScaleCalibration,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(Icons.Default.Straighten, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text("Калибровка по линейке")
             }
 
             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
