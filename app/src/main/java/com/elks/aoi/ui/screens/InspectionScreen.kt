@@ -10,6 +10,7 @@ import androidx.compose.ui.unit.dp
 import com.elks.aoi.camera.*
 import com.elks.aoi.data.BoardEntity
 import com.elks.aoi.data.BoardRepository
+import com.elks.aoi.settings.AppSettings
 import com.elks.aoi.vision.InspectVerdict
 import com.elks.aoi.vision.OpenCvInspector
 import kotlinx.coroutines.Dispatchers
@@ -20,6 +21,7 @@ import kotlinx.coroutines.withContext
 fun InspectionScreen(
     board: BoardEntity,
     repository: BoardRepository,
+    settings: AppSettings,
     hasCameraPermission: Boolean,
     onRequestPermission: () -> Unit,
     onBack: () -> Unit
@@ -66,30 +68,27 @@ fun InspectionScreen(
         onCapture = { captured ->
             if (isAnalyzing) return@CameraCaptureScreen
             isAnalyzing = true
-            statusText = "OpenCV: выравнивание и анализ..."
+            statusText = "Анализ (${settings.workResolution.longSide}px, ${settings.metric})..."
             statusColor = Color.Yellow
             defectRegions = emptyList()
 
             scope.launch {
                 val result = withContext(Dispatchers.Default) {
-                    OpenCvInspector.inspect(referenceBitmap, captured)
+                    OpenCvInspector.inspect(referenceBitmap, captured, settings)
                 }
                 defectRegions = result.defects
                 isAnalyzing = false
                 statusText = result.message
 
-                // K-2: three-state signalling — never paint UNRELIABLE as green
                 when (result.verdict) {
-                    InspectVerdict.PASS -> {
-                        statusColor = Color(0xFF4CAF50)
-                    }
+                    InspectVerdict.PASS -> statusColor = Color(0xFF4CAF50)
                     InspectVerdict.FAIL -> {
                         statusColor = Color.Red
-                        playDefectSound()
+                        if (settings.soundEnabled) playDefectSound()
                     }
                     InspectVerdict.UNRELIABLE -> {
-                        statusColor = Color(0xFFFFC107) // amber
-                        playRetrySound()
+                        statusColor = Color(0xFFFFC107)
+                        if (settings.soundEnabled) playRetrySound()
                     }
                 }
             }
@@ -99,7 +98,9 @@ fun InspectionScreen(
         defectRegions = defectRegions,
         statusText = statusText,
         statusColor = statusColor,
-        autoCaptureWhenReady = true,
-        frameAspectRatio = frameAspect
+        autoCaptureWhenReady = settings.autoCapture,
+        frameAspectRatio = frameAspect,
+        autoTorch = settings.autoTorch,
+        showGuidance = settings.guidanceOverlay
     )
 }

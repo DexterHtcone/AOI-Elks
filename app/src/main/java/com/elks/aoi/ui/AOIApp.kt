@@ -4,6 +4,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.platform.LocalContext
 import com.elks.aoi.data.BoardEntity
 import com.elks.aoi.data.BoardRepository
+import com.elks.aoi.settings.AppSettings
 import com.elks.aoi.ui.screens.*
 
 enum class Screen {
@@ -12,7 +13,8 @@ enum class Screen {
     BoardDetail,
     Inspection,
     Recalibrate,
-    About
+    About,
+    Settings
 }
 
 @Composable
@@ -22,6 +24,7 @@ fun AOIApp(
 ) {
     val context = LocalContext.current
     val repository = remember { BoardRepository(context) }
+    val settings = remember { AppSettings.get(context) }
 
     var currentScreen by remember { mutableStateOf(Screen.Catalog) }
     var selectedBoard by remember { mutableStateOf<BoardEntity?>(null) }
@@ -36,7 +39,8 @@ fun AOIApp(
                 selectedBoard = board
                 currentScreen = Screen.BoardDetail
             },
-            onAbout = { currentScreen = Screen.About }
+            onAbout = { currentScreen = Screen.About },
+            onSettings = { currentScreen = Screen.Settings }
         )
 
         Screen.AddBoard -> AddBoardScreen(
@@ -54,12 +58,8 @@ fun AOIApp(
                     board = board,
                     repository = repository,
                     onBack = { currentScreen = Screen.Catalog },
-                    onStartInspection = {
-                        currentScreen = Screen.Inspection
-                    },
-                    onRecalibrate = {
-                        currentScreen = Screen.Recalibrate
-                    },
+                    onStartInspection = { currentScreen = Screen.Inspection },
+                    onRecalibrate = { currentScreen = Screen.Recalibrate },
                     onDeleted = {
                         selectedBoard = null
                         currentScreen = Screen.Catalog
@@ -76,6 +76,7 @@ fun AOIApp(
                 InspectionScreen(
                     board = board,
                     repository = repository,
+                    settings = settings,
                     hasCameraPermission = hasCameraPermission,
                     onRequestPermission = onRequestPermission,
                     onBack = { currentScreen = Screen.BoardDetail }
@@ -101,7 +102,10 @@ fun AOIApp(
             }
         }
 
-        Screen.About -> AboutScreen(
+        Screen.About -> AboutScreen(onBack = { currentScreen = Screen.Catalog })
+
+        Screen.Settings -> SettingsScreen(
+            settings = settings,
             onBack = { currentScreen = Screen.Catalog }
         )
     }

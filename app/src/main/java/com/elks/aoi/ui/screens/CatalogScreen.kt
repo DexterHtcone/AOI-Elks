@@ -32,7 +32,8 @@ fun CatalogScreen(
     onRequestPermission: () -> Unit,
     onAddBoard: () -> Unit,
     onBoardClick: (BoardEntity) -> Unit,
-    onAbout: () -> Unit = {}
+    onAbout: () -> Unit = {},
+    onSettings: () -> Unit = {}
 ) {
     val boards by repository.getAllBoards().collectAsState(initial = emptyList())
 
@@ -50,6 +51,9 @@ fun CatalogScreen(
                     }
                 },
                 actions = {
+                    IconButton(onClick = onSettings) {
+                        Icon(Icons.Default.Settings, contentDescription = "Настройки")
+                    }
                     IconButton(onClick = onAbout) {
                         Icon(Icons.Default.Info, contentDescription = "О приложении / обновления")
                     }
@@ -86,20 +90,14 @@ fun CatalogScreen(
                         modifier = Modifier.size(64.dp),
                         tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)
                     )
-                    Text(
-                        "Каталог пуст",
-                        fontSize = 20.sp,
-                        fontWeight = FontWeight.Medium
-                    )
+                    Text("Каталог пуст", fontSize = 20.sp, fontWeight = FontWeight.Medium)
                     Text(
                         "Добавьте первую плату:\nсфотографируйте эталон и укажите название",
                         textAlign = TextAlign.Center,
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                     )
                     if (!hasCameraPermission) {
-                        Button(onClick = onRequestPermission) {
-                            Text("Разрешить камеру")
-                        }
+                        Button(onClick = onRequestPermission) { Text("Разрешить камеру") }
                     }
                 }
             }
@@ -158,11 +156,7 @@ fun BoardCard(board: BoardEntity, onClick: () -> Unit) {
             Spacer(modifier = Modifier.width(12.dp))
 
             Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = board.name,
-                    fontWeight = FontWeight.SemiBold,
-                    fontSize = 16.sp
-                )
+                Text(text = board.name, fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
                 if (board.description.isNotEmpty()) {
                     Text(
                         text = board.description,
