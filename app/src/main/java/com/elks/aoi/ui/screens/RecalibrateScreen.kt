@@ -52,6 +52,7 @@ fun RecalibrateScreen(
         titleText = "Перекалибровка: ${board.name}",
         statusText = statusText,
         statusColor = Color.Yellow,
-        autoCaptureWhenReady = false
+        autoCaptureWhenReady = false,
+        detectBoardContour = true
     )
 }
