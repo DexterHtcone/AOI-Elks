@@ -14,7 +14,8 @@ enum class Screen {
     Inspection,
     Recalibrate,
     About,
-    Settings
+    Settings,
+    ScaleCalibration
 }
 
 @Composable
@@ -106,7 +107,15 @@ fun AOIApp(
 
         Screen.Settings -> SettingsScreen(
             settings = settings,
-            onBack = { currentScreen = Screen.Catalog }
+            onBack = { currentScreen = Screen.Catalog },
+            onScaleCalibration = { currentScreen = Screen.ScaleCalibration }
+        )
+
+        Screen.ScaleCalibration -> ScaleCalibrationScreen(
+            settings = settings,
+            hasCameraPermission = hasCameraPermission,
+            onRequestPermission = onRequestPermission,
+            onBack = { currentScreen = Screen.Settings }
         )
     }
 }
