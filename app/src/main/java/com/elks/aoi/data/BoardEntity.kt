@@ -11,6 +11,10 @@ data class BoardEntity(
     val description: String = "",
     val referenceImagePath: String,
     val thumbnailPath: String = "",
+    /** JSON path of BoardOpinion (structured features / "AI opinion"). Empty if not extracted. */
+    val featuresPath: String = "",
+    /** Board-specific scale override (mm/px). 0 = use global AppSettings.mmPerPixel. */
+    val mmPerPixel: Float = 0f,
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis()
 )
