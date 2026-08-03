@@ -103,6 +103,9 @@ dependencies {
     // Official OpenCV Android AAR on Maven Central (since 4.9.0)
     implementation("org.opencv:opencv:4.9.0")
 
+    // Coil for AsyncImage (catalog / board detail thumbnails)
+    implementation("io.coil-kt:coil-compose:2.7.0")
+
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
 }

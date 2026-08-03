@@ -1,5 +1,6 @@
 package com.elks.aoi.ui.screens
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -57,7 +58,7 @@ fun SettingsScreen(
                 settings.setGuidanceOverlay(it)
             }
 
-            HorizontalDivider(Modifier.padding(vertical = 8.dp))
+            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
             SectionTitle("Детекция")
 
             Text("Разрешение анализа", fontWeight = FontWeight.Medium)
@@ -76,13 +77,13 @@ fun SettingsScreen(
                 }
             }
 
-            Spacer(Modifier.height(4.dp))
+            Spacer(modifier = Modifier.height(4.dp))
             Text("Метрика сравнения", fontWeight = FontWeight.Medium)
             MetricRadio(DiffMetric.MEAN, "Mean absdiff (быстро)", settings)
             MetricRadio(DiffMetric.ZNCC, "ZNCC (устойчивее к свету)", settings)
             MetricRadio(DiffMetric.PIXEL_RATIO, "Доля «горячих» пикселей", settings)
 
-            Spacer(Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(8.dp))
             SliderRow(
                 title = "Порог чувствительности",
                 value = settings.threshold,
@@ -121,7 +122,7 @@ fun SettingsScreen(
                 settings.showAllZones
             ) { settings.setShowAllZones(it) }
 
-            HorizontalDivider(Modifier.padding(vertical = 8.dp))
+            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
             SectionTitle("Выравнивание (ORB)")
 
             SliderRow(
@@ -148,7 +149,7 @@ fun SettingsScreen(
                 steps = 10
             ) { settings.setMaxDefectFraction(it) }
 
-            HorizontalDivider(Modifier.padding(vertical = 8.dp))
+            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
             SectionTitle("Хранение")
 
             SwitchRow(
@@ -157,7 +158,7 @@ fun SettingsScreen(
                 settings.savePng
             ) { settings.setSavePng(it) }
 
-            Spacer(Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(16.dp))
             OutlinedButton(
                 onClick = { settings.resetDefaults() },
                 modifier = Modifier.fillMaxWidth()
@@ -194,7 +195,7 @@ private fun SwitchRow(title: String, subtitle: String, checked: Boolean, onChang
             .padding(vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Column(Modifier.weight(1f)) {
+        Column(modifier = Modifier.weight(1f)) {
             Text(title, fontWeight = FontWeight.Medium)
             Text(subtitle, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
         }
@@ -211,7 +212,7 @@ private fun SliderRow(
     steps: Int,
     onChange: (Float) -> Unit
 ) {
-    Column(Modifier.padding(vertical = 4.dp)) {
+    Column(modifier = Modifier.padding(vertical = 4.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text(title, fontWeight = FontWeight.Medium)
             Text(valueLabel, fontWeight = FontWeight.SemiBold)
@@ -237,10 +238,6 @@ private fun MetricRadio(m: DiffMetric, label: String, settings: AppSettings) {
 }
 
 private fun Modifier.clickableLabel(onClick: () -> Unit): Modifier =
-    this.then(
-        Modifier.padding(vertical = 4.dp)
-    ).let { mod ->
-        androidx.compose.foundation.clickable(onClick = onClick).let { click ->
-            mod.then(click)
-        }
-    }
+    this
+        .padding(vertical = 4.dp)
+        .clickable(onClick = onClick)
