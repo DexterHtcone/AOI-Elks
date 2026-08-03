@@ -27,6 +27,8 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.rotate
@@ -38,6 +40,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import com.elks.aoi.vision.BoardContourDetector
 import kotlinx.coroutines.launch
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.Executors
@@ -56,7 +59,9 @@ data class FrameAnalysis(
     val hint: GuidanceHint,
     val brightness: Float,
     val fillRatio: Float,
-    val centered: Boolean
+    val centered: Boolean,
+    /** Normalized [0..1] polygon of detected board outline (image space). */
+    val boardContour: List<BoardContourDetector.NormPoint> = emptyList()
 )
 
 fun guidanceFrameRect(
@@ -84,7 +89,9 @@ fun CameraCaptureScreen(
     autoCaptureWhenReady: Boolean = false,
     frameAspectRatio: Float = 1.6f,
     autoTorch: Boolean = true,
-    showGuidance: Boolean = true
+    showGuidance: Boolean = true,
+    /** When true, OpenCV detects PCB outline and draws a live contour frame (for calibration). */
+    detectBoardContour: Boolean = false
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -99,6 +106,8 @@ fun CameraCaptureScreen(
     val lastAnalyzeMs = remember { java.util.concurrent.atomic.AtomicLong(0L) }
     val okStreak = remember { AtomicInteger(0) }
     val lastAutoCaptureMs = remember { java.util.concurrent.atomic.AtomicLong(0L) }
+    val detectContourFlag = remember { AtomicBoolean(detectBoardContour) }
+    detectContourFlag.set(detectBoardContour)
 
     LaunchedEffect(camera, autoTorch) {
         camera?.let { cam ->
@@ -157,8 +166,17 @@ fun CameraCaptureScreen(
                         }
                         lastAnalyzeMs.set(now)
                         analyzing.set(true)
-                        try { guidance = analyzeFrame(imageProxy) } catch (_: Exception) {}
-                        finally { analyzing.set(false); imageProxy.close() }
+                        try {
+                            val base = analyzeFrame(imageProxy)
+                            val contour = if (detectContourFlag.get()) {
+                                BoardContourDetector.detect(imageProxy)
+                            } else emptyList()
+                            guidance = base.copy(boardContour = contour)
+                        } catch (_: Exception) {
+                        } finally {
+                            analyzing.set(false)
+                            imageProxy.close()
+                        }
                     }
                     try {
                         cameraProvider.unbindAll()
@@ -178,6 +196,11 @@ fun CameraCaptureScreen(
 
         if (showGuidance) {
             GuidanceOverlay(guidance = guidance, aspectRatio = frameAspectRatio)
+        }
+
+        // Live PCB contour frame (OpenCV) — drawn above guidance, below UI chrome
+        if (detectBoardContour && guidance.boardContour.size >= 3) {
+            BoardContourOverlay(points = guidance.boardContour)
         }
 
         if (defectRegions.isNotEmpty()) {
@@ -230,6 +253,21 @@ fun CameraCaptureScreen(
                         .padding(horizontal = 14.dp, vertical = 8.dp)
                 )
             }
+            if (detectBoardContour) {
+                Spacer(modifier = Modifier.height(6.dp))
+                val contourHint = if (guidance.boardContour.size >= 4)
+                    "Контур платы найден — выровняйте и снимите"
+                else
+                    "Ищем контур платы…"
+                Text(
+                    contourHint,
+                    color = if (guidance.boardContour.size >= 4) Color(0xFF69F0AE) else Color.White.copy(alpha = 0.85f),
+                    fontSize = 12.sp,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.background(Color.Black.copy(alpha = 0.5f), RoundedCornerShape(6.dp))
+                        .padding(horizontal = 10.dp, vertical = 4.dp)
+                )
+            }
         }
 
         val hintLabel = when (guidance.hint) {
@@ -275,6 +313,34 @@ fun CameraCaptureScreen(
                 if (isCapturing) CircularProgressIndicator(color = Color.White, modifier = Modifier.size(32.dp))
                 else Icon(Icons.Default.Camera, contentDescription = "Снять", modifier = Modifier.size(36.dp), tint = Color.White)
             }
+        }
+    }
+}
+
+@Composable
+fun BoardContourOverlay(points: List<BoardContourDetector.NormPoint>) {
+    Canvas(modifier = Modifier.fillMaxSize()) {
+        if (points.size < 3) return@Canvas
+        val path = Path()
+        val first = Offset(points[0].x * size.width, points[0].y * size.height)
+        path.moveTo(first.x, first.y)
+        for (i in 1 until points.size) {
+            path.lineTo(points[i].x * size.width, points[i].y * size.height)
+        }
+        path.close()
+        // Soft fill
+        drawPath(path, Color(0xFF00E676).copy(alpha = 0.12f))
+        // Bright contour frame
+        drawPath(
+            path,
+            Color(0xFF00E676),
+            style = Stroke(width = 6f, cap = StrokeCap.Round, join = StrokeJoin.Round)
+        )
+        // Corner dots for clarity
+        points.forEach { p ->
+            val o = Offset(p.x * size.width, p.y * size.height)
+            drawCircle(Color.White, radius = 8f, center = o)
+            drawCircle(Color(0xFF00E676), radius = 5f, center = o)
         }
     }
 }
