@@ -49,13 +49,7 @@ import kotlin.math.min
 data class DefectRegion(val left: Float, val top: Float, val right: Float, val bottom: Float)
 
 enum class GuidanceHint {
-    OK,
-    TOO_DARK,
-    TOO_BRIGHT,
-    MOVE_CLOSER,
-    MOVE_FARTHER,
-    CENTER_BOARD,
-    HOLD_STEADY
+    OK, TOO_DARK, TOO_BRIGHT, MOVE_CLOSER, MOVE_FARTHER, CENTER_BOARD, HOLD_STEADY
 }
 
 data class FrameAnalysis(
@@ -66,19 +60,14 @@ data class FrameAnalysis(
 )
 
 fun guidanceFrameRect(
-    screenW: Float,
-    screenH: Float,
-    aspectRatio: Float = 1.6f
+    screenW: Float, screenH: Float, aspectRatio: Float = 1.6f
 ): androidx.compose.ui.geometry.Rect {
     val aspect = aspectRatio.coerceIn(0.4f, 3.5f)
     val maxW = screenW * 0.92f
     val maxH = screenH * 0.58f
     var frameW = maxW
     var frameH = frameW / aspect
-    if (frameH > maxH) {
-        frameH = maxH
-        frameW = frameH * aspect
-    }
+    if (frameH > maxH) { frameH = maxH; frameW = frameH * aspect }
     val left = (screenW - frameW) / 2f
     val top = (screenH - frameH) / 2f - screenH * 0.03f
     return androidx.compose.ui.geometry.Rect(left, top, left + frameW, top + frameH)
@@ -93,7 +82,9 @@ fun CameraCaptureScreen(
     statusText: String? = null,
     statusColor: Color = Color.White,
     autoCaptureWhenReady: Boolean = false,
-    frameAspectRatio: Float = 1.6f
+    frameAspectRatio: Float = 1.6f,
+    autoTorch: Boolean = true,
+    showGuidance: Boolean = true
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -109,12 +100,10 @@ fun CameraCaptureScreen(
     val okStreak = remember { AtomicInteger(0) }
     val lastAutoCaptureMs = remember { java.util.concurrent.atomic.AtomicLong(0L) }
 
-    LaunchedEffect(camera) {
+    LaunchedEffect(camera, autoTorch) {
         camera?.let { cam ->
             try {
-                if (cam.cameraInfo.hasFlashUnit()) {
-                    cam.cameraControl.enableTorch(true)
-                }
+                if (cam.cameraInfo.hasFlashUnit()) cam.cameraControl.enableTorch(autoTorch)
             } catch (_: Exception) {}
         }
     }
@@ -134,9 +123,7 @@ fun CameraCaptureScreen(
                     }
                 }
             }
-        } else {
-            okStreak.set(0)
-        }
+        } else okStreak.set(0)
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -149,67 +136,49 @@ fun CameraCaptureScreen(
                     )
                     scaleType = PreviewView.ScaleType.FILL_CENTER
                 }
-
                 val cameraProviderFuture = ProcessCameraProvider.getInstance(ctx)
                 cameraProviderFuture.addListener({
                     val cameraProvider = cameraProviderFuture.get()
-
                     val preview = Preview.Builder().build().also {
                         it.surfaceProvider = previewView.surfaceProvider
                     }
-
                     val capture = ImageCapture.Builder()
                         .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
                         .build()
                     imageCapture = capture
-
                     val analysis = ImageAnalysis.Builder()
                         .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                         .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_YUV_420_888)
                         .build()
-
                     analysis.setAnalyzer(Executors.newSingleThreadExecutor()) { imageProxy ->
                         val now = System.currentTimeMillis()
                         if (now - lastAnalyzeMs.get() < 200 || analyzing.get()) {
-                            imageProxy.close()
-                            return@setAnalyzer
+                            imageProxy.close(); return@setAnalyzer
                         }
                         lastAnalyzeMs.set(now)
                         analyzing.set(true)
-                        try {
-                            guidance = analyzeFrame(imageProxy)
-                        } catch (_: Exception) {
-                        } finally {
-                            analyzing.set(false)
-                            imageProxy.close()
-                        }
+                        try { guidance = analyzeFrame(imageProxy) } catch (_: Exception) {}
+                        finally { analyzing.set(false); imageProxy.close() }
                     }
-
                     try {
                         cameraProvider.unbindAll()
                         camera = cameraProvider.bindToLifecycle(
-                            lifecycleOwner,
-                            CameraSelector.DEFAULT_BACK_CAMERA,
-                            preview,
-                            capture,
-                            analysis
+                            lifecycleOwner, CameraSelector.DEFAULT_BACK_CAMERA,
+                            preview, capture, analysis
                         )
                         camera?.let { cam ->
-                            if (cam.cameraInfo.hasFlashUnit()) {
-                                cam.cameraControl.enableTorch(true)
-                            }
+                            if (cam.cameraInfo.hasFlashUnit()) cam.cameraControl.enableTorch(autoTorch)
                         }
-                    } catch (e: Exception) {
-                        e.printStackTrace()
-                    }
+                    } catch (e: Exception) { e.printStackTrace() }
                 }, ContextCompat.getMainExecutor(ctx))
-
                 previewView
             },
             modifier = Modifier.fillMaxSize()
         )
 
-        GuidanceOverlay(guidance = guidance, aspectRatio = frameAspectRatio)
+        if (showGuidance) {
+            GuidanceOverlay(guidance = guidance, aspectRatio = frameAspectRatio)
+        }
 
         if (defectRegions.isNotEmpty()) {
             Canvas(modifier = Modifier.fillMaxSize()) {
@@ -220,79 +189,51 @@ fun CameraCaptureScreen(
                         val t = frame.top + r.top * frame.height
                         val w = (r.right - r.left) * frame.width
                         val h = (r.bottom - r.top) * frame.height
-                        drawRect(
-                            color = Color.Red.copy(alpha = 0.28f),
-                            topLeft = Offset(l, t),
-                            size = Size(w, h)
-                        )
-                        drawRect(
-                            color = Color.Red.copy(alpha = 0.95f),
-                            topLeft = Offset(l, t),
-                            size = Size(w, h),
-                            style = Stroke(width = 5f)
-                        )
+                        drawRect(Color.Red.copy(alpha = 0.28f), Offset(l, t), Size(w, h))
+                        drawRect(Color.Red.copy(alpha = 0.95f), Offset(l, t), Size(w, h), style = Stroke(width = 5f))
                     }
                 }
             }
         }
 
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .statusBarsPadding()
-                .padding(8.dp),
+            modifier = Modifier.fillMaxWidth().statusBarsPadding().padding(8.dp),
             horizontalArrangement = Arrangement.Start
         ) {
             IconButton(
                 onClick = onBack,
-                colors = IconButtonDefaults.iconButtonColors(
-                    containerColor = Color.Black.copy(alpha = 0.5f)
-                )
+                colors = IconButtonDefaults.iconButtonColors(containerColor = Color.Black.copy(alpha = 0.5f))
             ) {
                 Icon(Icons.Default.Close, contentDescription = "Назад", tint = Color.White)
             }
         }
 
         Column(
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .statusBarsPadding()
-                .padding(top = 56.dp)
-                .padding(horizontal = 16.dp),
+            modifier = Modifier.align(Alignment.TopCenter).statusBarsPadding()
+                .padding(top = 56.dp).padding(horizontal = 16.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             if (titleText.isNotEmpty()) {
                 Text(
-                    titleText,
-                    color = Color.White,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Medium,
+                    titleText, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium,
                     textAlign = TextAlign.Center,
-                    modifier = Modifier
-                        .background(Color.Black.copy(alpha = 0.55f), RoundedCornerShape(8.dp))
+                    modifier = Modifier.background(Color.Black.copy(alpha = 0.55f), RoundedCornerShape(8.dp))
                         .padding(horizontal = 12.dp, vertical = 6.dp)
                 )
             }
             if (statusText != null) {
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    statusText,
-                    color = statusColor,
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.Bold,
+                    statusText, color = statusColor, fontSize = 15.sp, fontWeight = FontWeight.Bold,
                     textAlign = TextAlign.Center,
-                    modifier = Modifier
-                        .background(Color.Black.copy(alpha = 0.65f), RoundedCornerShape(8.dp))
+                    modifier = Modifier.background(Color.Black.copy(alpha = 0.65f), RoundedCornerShape(8.dp))
                         .padding(horizontal = 14.dp, vertical = 8.dp)
                 )
             }
         }
 
         val hintLabel = when (guidance.hint) {
-            GuidanceHint.OK -> if (autoCaptureWhenReady)
-                "✓ Держите ровно — съёмка автоматически"
-            else
-                "✓ Готово — можно снимать"
+            GuidanceHint.OK -> if (autoCaptureWhenReady) "✓ Держите ровно — съёмка автоматически" else "✓ Готово — можно снимать"
             GuidanceHint.TOO_DARK -> "Слишком темно — подождите авто-подстройку"
             GuidanceHint.TOO_BRIGHT -> "Слишком ярко — чуть отдалите или смените угол"
             GuidanceHint.MOVE_CLOSER -> "Приблизьте: плата должна заполнить рамку"
@@ -307,31 +248,19 @@ fun CameraCaptureScreen(
         }
 
         Column(
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .navigationBarsPadding()
-                .padding(bottom = 110.dp)
-                .padding(horizontal = 24.dp),
+            modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding()
+                .padding(bottom = 110.dp).padding(horizontal = 24.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Text(
-                text = hintLabel,
-                color = Color.White,
-                fontSize = 15.sp,
-                fontWeight = FontWeight.SemiBold,
+                text = hintLabel, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold,
                 textAlign = TextAlign.Center,
-                modifier = Modifier
-                    .background(hintColor.copy(alpha = 0.85f), RoundedCornerShape(10.dp))
+                modifier = Modifier.background(hintColor.copy(alpha = 0.85f), RoundedCornerShape(10.dp))
                     .padding(horizontal = 16.dp, vertical = 10.dp)
             )
         }
 
-        Box(
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .navigationBarsPadding()
-                .padding(bottom = 28.dp)
-        ) {
+        Box(modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 28.dp)) {
             FloatingActionButton(
                 onClick = {
                     if (isCapturing) return@FloatingActionButton
@@ -343,11 +272,8 @@ fun CameraCaptureScreen(
                 shape = CircleShape,
                 containerColor = MaterialTheme.colorScheme.primary
             ) {
-                if (isCapturing) {
-                    CircularProgressIndicator(color = Color.White, modifier = Modifier.size(32.dp))
-                } else {
-                    Icon(Icons.Default.Camera, contentDescription = "Снять", modifier = Modifier.size(36.dp), tint = Color.White)
-                }
+                if (isCapturing) CircularProgressIndicator(color = Color.White, modifier = Modifier.size(32.dp))
+                else Icon(Icons.Default.Camera, contentDescription = "Снять", modifier = Modifier.size(36.dp), tint = Color.White)
             }
         }
     }
@@ -357,26 +283,18 @@ fun CameraCaptureScreen(
 fun GuidanceOverlay(guidance: FrameAnalysis, aspectRatio: Float = 1.6f) {
     Canvas(modifier = Modifier.fillMaxSize()) {
         val frame = guidanceFrameRect(size.width, size.height, aspectRatio)
-        val left = frame.left
-        val top = frame.top
-        val frameW = frame.width
-        val frameH = frame.height
-
+        val left = frame.left; val top = frame.top; val frameW = frame.width; val frameH = frame.height
         val frameColor = when (guidance.hint) {
             GuidanceHint.OK -> Color(0xFF4CAF50)
             GuidanceHint.TOO_DARK, GuidanceHint.TOO_BRIGHT -> Color(0xFFFFC107)
             else -> Color(0xFFFF9800)
         }
-
         drawRect(Color.Black.copy(alpha = 0.35f), Offset.Zero, Size(size.width, top))
         drawRect(Color.Black.copy(alpha = 0.35f), Offset(0f, top + frameH), Size(size.width, size.height - top - frameH))
         drawRect(Color.Black.copy(alpha = 0.35f), Offset(0f, top), Size(left, frameH))
         drawRect(Color.Black.copy(alpha = 0.35f), Offset(left + frameW, top), Size(size.width - left - frameW, frameH))
-
         drawRect(color = frameColor, topLeft = Offset(left, top), size = Size(frameW, frameH), style = Stroke(width = 5f))
-
-        val c = 48f
-        val sw = 10f
+        val c = 48f; val sw = 10f
         drawLine(Color.White, Offset(left, top), Offset(left + c, top), sw)
         drawLine(Color.White, Offset(left, top), Offset(left, top + c), sw)
         drawLine(Color.White, Offset(left + frameW - c, top), Offset(left + frameW, top), sw)
@@ -385,10 +303,7 @@ fun GuidanceOverlay(guidance: FrameAnalysis, aspectRatio: Float = 1.6f) {
         drawLine(Color.White, Offset(left, top + frameH), Offset(left + c, top + frameH), sw)
         drawLine(Color.White, Offset(left + frameW, top + frameH - c), Offset(left + frameW, top + frameH), sw)
         drawLine(Color.White, Offset(left + frameW - c, top + frameH), Offset(left + frameW, top + frameH), sw)
-
-        val cx = size.width / 2
-        val cy = top + frameH / 2
-
+        val cx = size.width / 2; val cy = top + frameH / 2
         when (guidance.hint) {
             GuidanceHint.MOVE_CLOSER -> {
                 drawArrow(Offset(cx, top + 30f), 0f, Color.White)
@@ -411,17 +326,10 @@ fun GuidanceOverlay(guidance: FrameAnalysis, aspectRatio: Float = 1.6f) {
     }
 }
 
-private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawArrow(
-    tip: Offset,
-    rotationDeg: Float,
-    color: Color
-) {
+private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawArrow(tip: Offset, rotationDeg: Float, color: Color) {
     rotate(rotationDeg, tip) {
         val path = Path().apply {
-            moveTo(tip.x, tip.y)
-            lineTo(tip.x - 22f, tip.y - 35f)
-            lineTo(tip.x + 22f, tip.y - 35f)
-            close()
+            moveTo(tip.x, tip.y); lineTo(tip.x - 22f, tip.y - 35f); lineTo(tip.x + 22f, tip.y - 35f); close()
         }
         drawPath(path, color)
     }
@@ -432,24 +340,12 @@ fun analyzeFrame(image: ImageProxy): FrameAnalysis {
     val yBuffer = yPlane.buffer
     val rowStride = yPlane.rowStride
     val pixelStride = yPlane.pixelStride
-    val width = image.width
-    val height = image.height
-
+    val width = image.width; val height = image.height
     val step = 8
-    var sum = 0L
-    var count = 0
-
-    val cx0 = width / 4
-    val cx1 = width * 3 / 4
-    val cy0 = height / 4
-    val cy1 = height * 3 / 4
-    var centerSum = 0L
-    var centerCount = 0
-    var borderSum = 0L
-    var borderCount = 0
-    var edgeSum = 0L
-    var edgeCount = 0
-
+    var sum = 0L; var count = 0
+    val cx0 = width / 4; val cx1 = width * 3 / 4; val cy0 = height / 4; val cy1 = height * 3 / 4
+    var centerSum = 0L; var centerCount = 0; var borderSum = 0L; var borderCount = 0
+    var edgeSum = 0L; var edgeCount = 0
     var y = 0
     while (y < height) {
         var x = 0
@@ -457,22 +353,13 @@ fun analyzeFrame(image: ImageProxy): FrameAnalysis {
             val idx = y * rowStride + x * pixelStride
             if (idx < yBuffer.capacity()) {
                 val v = yBuffer.get(idx).toInt() and 0xFF
-                sum += v
-                count++
-                val inCenter = x in cx0 until cx1 && y in cy0 until cy1
-                if (inCenter) {
-                    centerSum += v
-                    centerCount++
-                } else {
-                    borderSum += v
-                    borderCount++
-                }
+                sum += v; count++
+                if (x in cx0 until cx1 && y in cy0 until cy1) { centerSum += v; centerCount++ }
+                else { borderSum += v; borderCount++ }
                 if (x + step < width) {
                     val idx2 = y * rowStride + (x + step) * pixelStride
                     if (idx2 < yBuffer.capacity()) {
-                        val v2 = yBuffer.get(idx2).toInt() and 0xFF
-                        edgeSum += abs(v - v2)
-                        edgeCount++
+                        edgeSum += abs(v - (yBuffer.get(idx2).toInt() and 0xFF)); edgeCount++
                     }
                 }
             }
@@ -480,7 +367,6 @@ fun analyzeFrame(image: ImageProxy): FrameAnalysis {
         }
         y += step
     }
-
     val brightness = if (count > 0) (sum.toFloat() / count) / 255f else 0.5f
     val centerBright = if (centerCount > 0) (centerSum.toFloat() / centerCount) / 255f else 0.5f
     val borderBright = if (borderCount > 0) (borderSum.toFloat() / borderCount) / 255f else 0.5f
@@ -488,7 +374,6 @@ fun analyzeFrame(image: ImageProxy): FrameAnalysis {
     val contrast = abs(centerBright - borderBright)
     val fillRatio = min(1f, edgeDensity * 4f + contrast * 2f)
     val centered = contrast > 0.05f && edgeDensity > 0.04f
-
     val hint = when {
         brightness < 0.18f -> GuidanceHint.TOO_DARK
         brightness > 0.88f -> GuidanceHint.TOO_BRIGHT
@@ -498,7 +383,6 @@ fun analyzeFrame(image: ImageProxy): FrameAnalysis {
         fillRatio in 0.2f..0.75f && brightness in 0.22f..0.82f -> GuidanceHint.OK
         else -> GuidanceHint.HOLD_STEADY
     }
-
     return FrameAnalysis(hint, brightness, fillRatio, centered)
 }
 
@@ -515,15 +399,10 @@ private fun triggerCapture(
         override fun onCaptureSuccess(image: ImageProxy) {
             val bitmap = imageProxyToBitmap(image)
             image.close()
-            scope.launch {
-                onCapture(bitmap)
-                setCapturing(false)
-            }
+            scope.launch { onCapture(bitmap); setCapturing(false) }
         }
-
         override fun onError(exception: ImageCaptureException) {
-            exception.printStackTrace()
-            setCapturing(false)
+            exception.printStackTrace(); setCapturing(false)
         }
     })
 }
@@ -531,24 +410,17 @@ private fun triggerCapture(
 fun imageProxyToBitmap(image: ImageProxy): Bitmap {
     if (image.format == ImageFormat.JPEG) {
         val buffer = image.planes[0].buffer
-        val bytes = ByteArray(buffer.remaining())
-        buffer.get(bytes)
+        val bytes = ByteArray(buffer.remaining()); buffer.get(bytes)
         val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
         val matrix = Matrix().apply { postRotate(image.imageInfo.rotationDegrees.toFloat()) }
         return Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
     }
-
     val yBuffer = image.planes[0].buffer
     val uBuffer = image.planes[1].buffer
     val vBuffer = image.planes[2].buffer
-    val ySize = yBuffer.remaining()
-    val uSize = uBuffer.remaining()
-    val vSize = vBuffer.remaining()
+    val ySize = yBuffer.remaining(); val uSize = uBuffer.remaining(); val vSize = vBuffer.remaining()
     val nv21 = ByteArray(ySize + uSize + vSize)
-    yBuffer.get(nv21, 0, ySize)
-    vBuffer.get(nv21, ySize, vSize)
-    uBuffer.get(nv21, ySize + vSize, uSize)
-
+    yBuffer.get(nv21, 0, ySize); vBuffer.get(nv21, ySize, vSize); uBuffer.get(nv21, ySize + vSize, uSize)
     val yuvImage = YuvImage(nv21, ImageFormat.NV21, image.width, image.height, null)
     val out = ByteArrayOutputStream()
     yuvImage.compressToJpeg(Rect(0, 0, image.width, image.height), 90, out)
@@ -560,15 +432,12 @@ fun imageProxyToBitmap(image: ImageProxy): Bitmap {
 
 fun playDefectSound() {
     try {
-        val toneGen = ToneGenerator(AudioManager.STREAM_ALARM, 90)
-        toneGen.startTone(ToneGenerator.TONE_CDMA_ALERT_CALL_GUARD, 500)
+        ToneGenerator(AudioManager.STREAM_ALARM, 90).startTone(ToneGenerator.TONE_CDMA_ALERT_CALL_GUARD, 500)
     } catch (_: Exception) {}
 }
 
-/** Distinct tone for UNRELIABLE / retry (review K-2). */
 fun playRetrySound() {
     try {
-        val toneGen = ToneGenerator(AudioManager.STREAM_NOTIFICATION, 80)
-        toneGen.startTone(ToneGenerator.TONE_PROP_BEEP2, 350)
+        ToneGenerator(AudioManager.STREAM_NOTIFICATION, 80).startTone(ToneGenerator.TONE_PROP_BEEP2, 350)
     } catch (_: Exception) {}
 }
