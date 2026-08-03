@@ -55,7 +55,8 @@ fun AddBoardScreen(
                 },
                 onBack = onBack,
                 titleText = "Эталон: сфотографируйте ИСПРАВНУЮ плату",
-                autoCaptureWhenReady = false
+                autoCaptureWhenReady = false,
+                detectBoardContour = true
             )
         }
 
