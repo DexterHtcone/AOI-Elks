@@ -71,6 +71,10 @@ class AppSettings private constructor(context: Context) {
     var showAllZones by mutableStateOf(prefs.getBoolean(K_SHOW_ALL, true))
         private set
 
+    /** Global scale: millimetres per pixel. 0 = not calibrated. */
+    var mmPerPixel by mutableStateOf(prefs.getFloat(K_MM_PER_PX, 0f))
+        private set
+
     @JvmName("setAutoTorchValue")
     fun setAutoTorch(v: Boolean) { autoTorch = v; prefs.edit().putBoolean(K_AUTO_TORCH, v).apply() }
     @JvmName("setAutoCaptureValue")
@@ -129,6 +133,12 @@ class AppSettings private constructor(context: Context) {
     @JvmName("setShowAllZonesValue")
     fun setShowAllZones(v: Boolean) { showAllZones = v; prefs.edit().putBoolean(K_SHOW_ALL, v).apply() }
 
+    @JvmName("setMmPerPixelValue")
+    fun setMmPerPixel(v: Float) {
+        mmPerPixel = if (v <= 0f) 0f else v.coerceIn(0.0001f, 5f)
+        prefs.edit().putFloat(K_MM_PER_PX, mmPerPixel).apply()
+    }
+
     fun resetDefaults() {
         setAutoTorch(true)
         setAutoCapture(true)
@@ -146,6 +156,7 @@ class AppSettings private constructor(context: Context) {
         setMaxDefectFraction(0.35f)
         setSavePng(true)
         setShowAllZones(true)
+        // mmPerPixel intentionally kept (user calibration)
     }
 
     companion object {
@@ -166,6 +177,7 @@ class AppSettings private constructor(context: Context) {
         private const val K_MAX_FRAC = "max_frac"
         private const val K_SAVE_PNG = "save_png"
         private const val K_SHOW_ALL = "show_all"
+        private const val K_MM_PER_PX = "mm_per_px"
 
         @Volatile private var instance: AppSettings? = null
 
