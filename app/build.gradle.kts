@@ -100,7 +100,8 @@ dependencies {
 
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
 
-    implementation("com.quickbirdstudios:opencv:4.9.0")
+    // Official OpenCV Android AAR on Maven Central (since 4.9.0)
+    implementation("org.opencv:opencv:4.9.0")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
