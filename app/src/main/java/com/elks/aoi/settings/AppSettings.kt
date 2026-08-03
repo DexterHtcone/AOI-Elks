@@ -5,6 +5,7 @@ import android.content.SharedPreferences
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import kotlin.jvm.JvmName
 
 enum class DiffMetric {
     /** Средняя absdiff по ячейке (быстро, грубо). */
@@ -70,46 +71,62 @@ class AppSettings private constructor(context: Context) {
     var showAllZones by mutableStateOf(prefs.getBoolean(K_SHOW_ALL, true))
         private set
 
+    @JvmName("setAutoTorchValue")
     fun setAutoTorch(v: Boolean) { autoTorch = v; prefs.edit().putBoolean(K_AUTO_TORCH, v).apply() }
+    @JvmName("setAutoCaptureValue")
     fun setAutoCapture(v: Boolean) { autoCapture = v; prefs.edit().putBoolean(K_AUTO_CAPTURE, v).apply() }
+    @JvmName("setSoundEnabledValue")
     fun setSoundEnabled(v: Boolean) { soundEnabled = v; prefs.edit().putBoolean(K_SOUND, v).apply() }
+    @JvmName("setGuidanceOverlayValue")
     fun setGuidanceOverlay(v: Boolean) { guidanceOverlay = v; prefs.edit().putBoolean(K_GUIDANCE, v).apply() }
 
+    @JvmName("setWorkResolutionValue")
     fun setWorkResolution(v: WorkResolution) {
         workResolution = v
         prefs.edit().putInt(K_RES, v.ordinal).apply()
     }
+    @JvmName("setMetricValue")
     fun setMetric(v: DiffMetric) {
         metric = v
         prefs.edit().putInt(K_METRIC, v.ordinal).apply()
     }
+    @JvmName("setThresholdValue")
     fun setThreshold(v: Float) {
         threshold = v.coerceIn(0.02f, 0.60f)
         prefs.edit().putFloat(K_THRESHOLD, threshold).apply()
     }
+    @JvmName("setGridXValue")
     fun setGridX(v: Int) {
         gridX = v.coerceIn(4, 24)
         prefs.edit().putInt(K_GRID_X, gridX).apply()
     }
+    @JvmName("setGridYValue")
     fun setGridY(v: Int) {
         gridY = v.coerceIn(4, 20)
         prefs.edit().putInt(K_GRID_Y, gridY).apply()
     }
+    @JvmName("setUseClaheValue")
     fun setUseClahe(v: Boolean) { useClahe = v; prefs.edit().putBoolean(K_CLAHE, v).apply() }
+    @JvmName("setUseGeometricMaskValue")
     fun setUseGeometricMask(v: Boolean) { useGeometricMask = v; prefs.edit().putBoolean(K_GEO_MASK, v).apply() }
+    @JvmName("setMinMatchesValue")
     fun setMinMatches(v: Int) {
         minMatches = v.coerceIn(5, 50)
         prefs.edit().putInt(K_MIN_MATCHES, minMatches).apply()
     }
+    @JvmName("setMinInliersValue")
     fun setMinInliers(v: Int) {
         minInliers = v.coerceIn(8, 80)
         prefs.edit().putInt(K_MIN_INLIERS, minInliers).apply()
     }
+    @JvmName("setMaxDefectFractionValue")
     fun setMaxDefectFraction(v: Float) {
         maxDefectFraction = v.coerceIn(0.15f, 0.80f)
         prefs.edit().putFloat(K_MAX_FRAC, maxDefectFraction).apply()
     }
+    @JvmName("setSavePngValue")
     fun setSavePng(v: Boolean) { savePng = v; prefs.edit().putBoolean(K_SAVE_PNG, v).apply() }
+    @JvmName("setShowAllZonesValue")
     fun setShowAllZones(v: Boolean) { showAllZones = v; prefs.edit().putBoolean(K_SHOW_ALL, v).apply() }
 
     fun resetDefaults() {
