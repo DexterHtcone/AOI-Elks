@@ -2,6 +2,7 @@ package com.elks.aoi
 
 import android.app.Application
 import android.util.Log
+import com.elks.aoi.update.UpdateInstaller
 import org.opencv.android.OpenCVLoader
 
 class AoiApplication : Application() {
@@ -10,6 +11,8 @@ class AoiApplication : Application() {
         val ok = OpenCVLoader.initLocal()
         Log.i(TAG, if (ok) "OpenCV loaded successfully" else "OpenCV failed to load")
         openCvReady = ok
+        // Register early so download-complete → install works even if AboutScreen is closed
+        UpdateInstaller.register(this)
     }
 
     companion object {

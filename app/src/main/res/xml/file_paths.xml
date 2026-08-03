@@ -1,5 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths>
+    <!-- Public Downloads (DownloadManager default destination) -->
     <external-path name="downloads" path="Download/" />
+    <external-path name="external" path="." />
+    <!-- App-specific external files -->
+    <external-files-path name="ext_files" path="." />
     <cache-path name="cache" path="." />
+    <files-path name="files" path="." />
 </paths>

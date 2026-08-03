@@ -156,6 +156,9 @@ object UpdateChecker {
     }
 
     fun enqueueDownload(context: Context, apkUrl: String, version: String): Long {
+        // Ensure receiver is registered before enqueue
+        UpdateInstaller.register(context)
+
         val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
         // Always force .apk in the filename — MIUI/Xiaomi sometimes drops the extension
         // when using only setTitle() or when Content-Disposition is ambiguous.
@@ -170,7 +173,10 @@ object UpdateChecker {
             setAllowedOverMetered(true)
             setAllowedOverRoaming(true)
         }
-        return dm.enqueue(req)
+        val id = dm.enqueue(req)
+        UpdateInstaller.rememberDownloadId(context, id)
+        Log.i(TAG, "Enqueued download id=$id name=$safeName")
+        return id
     }
 
     fun openReleasesPage(context: Context) {

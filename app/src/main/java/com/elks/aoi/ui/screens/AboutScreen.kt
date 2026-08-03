@@ -138,14 +138,28 @@ fun AboutScreen(onBack: () -> Unit) {
                 if (u.available && u.apkUrl != null) {
                     Button(
                         onClick = {
+                            // Android 8+: need "Install unknown apps" permission for auto-install
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                                if (!context.packageManager.canRequestPackageInstalls()) {
+                                    try {
+                                        val settings = android.content.Intent(
+                                            android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                                            android.net.Uri.parse("package:${context.packageName}")
+                                        )
+                                        context.startActivity(settings)
+                                        status = "Разрешите установку из этого источника, затем снова нажмите «Скачать»."
+                                        return@Button
+                                    } catch (_: Exception) { /* continue download */ }
+                                }
+                            }
                             UpdateChecker.enqueueDownload(
                                 context, u.apkUrl, u.latestVersion
                             )
-                            status = "Загрузка начата. После скачивания откройте APK из уведомления и установите."
+                            status = "Загрузка начата. После скачивания установка запустится автоматически."
                         },
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Text("Скачать ${u.latestVersion}")
+                        Text("Скачать и установить ${u.latestVersion}")
                     }
                 }
 
