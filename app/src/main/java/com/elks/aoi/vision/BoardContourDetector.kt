@@ -22,11 +22,16 @@ import kotlin.math.min
  * Coordinates are returned in **upright display space** (sensor frame rotated by
  * [ImageProxy.getImageInfo] rotationDegrees), normalized to [0..1].
  * The UI must map them through FILL_CENTER using [ContourResult.imageAspect].
+ *
+ * Improvements:
+ *  - Reject contours that touch the image border (table / paper edges).
+ *  - Prefer compact mid-sized rectangles near the optical centre.
+ *  - Run both adaptive-threshold and Canny pipelines; pick the better candidate.
  */
 object BoardContourDetector {
 
     private const val TAG = "BoardContour"
-    private const val WORK_LONG = 360
+    private const val WORK_LONG = 400
 
     data class NormPoint(val x: Float, val y: Float)
 
@@ -43,8 +48,6 @@ object BoardContourDetector {
         var upright: Mat? = null
         var small: Mat? = null
         var blurred: Mat? = null
-        var binary: Mat? = null
-        var hierarchy: Mat? = null
 
         try {
             val width = image.width
@@ -70,13 +73,62 @@ object BoardContourDetector {
             blurred = Mat()
             Imgproc.GaussianBlur(small, blurred, Size(5.0, 5.0), 0.0)
 
-            // Adaptive threshold is more stable for dark objects on light table than pure Canny
+            val fromAdaptive = findBestContour(blurred, workW, workH, useAdaptive = true)
+            val fromCanny = findBestContour(blurred, workW, workH, useAdaptive = false)
+
+            val best = when {
+                fromAdaptive != null && fromCanny != null ->
+                    if (fromAdaptive.score >= fromCanny.score) fromAdaptive else fromCanny
+                fromAdaptive != null -> fromAdaptive
+                fromCanny != null -> fromCanny
+                else -> null
+            } ?: return ContourResult(emptyList(), aspect)
+
+            val points = best.pts.map { p ->
+                NormPoint(
+                    x = (p.x / workW).toFloat().coerceIn(0f, 1f),
+                    y = (p.y / workH).toFloat().coerceIn(0f, 1f)
+                )
+            }
+            return ContourResult(points, aspect)
+        } catch (e: Exception) {
+            Log.w(TAG, "detect failed: ${e.message}")
+            return ContourResult(emptyList(), 1f)
+        } finally {
+            yMat?.release()
+            upright?.release()
+            small?.release()
+            blurred?.release()
+        }
+    }
+
+    private data class Candidate(val pts: Array<Point>, val score: Double)
+
+    private fun findBestContour(
+        gray: Mat,
+        workW: Int,
+        workH: Int,
+        useAdaptive: Boolean
+    ): Candidate? {
+        var binary: Mat? = null
+        var hierarchy: Mat? = null
+        try {
             binary = Mat()
-            Imgproc.adaptiveThreshold(
-                blurred, binary, 255.0,
-                Imgproc.ADAPTIVE_THRESH_GAUSSIAN_C,
-                Imgproc.THRESH_BINARY_INV, 31, 7.0
-            )
+            if (useAdaptive) {
+                Imgproc.adaptiveThreshold(
+                    gray, binary, 255.0,
+                    Imgproc.ADAPTIVE_THRESH_GAUSSIAN_C,
+                    Imgproc.THRESH_BINARY_INV, 35, 8.0
+                )
+            } else {
+                val edges = Mat()
+                Imgproc.Canny(gray, edges, 40.0, 120.0)
+                val k = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, Size(3.0, 3.0))
+                Imgproc.dilate(edges, binary, k)
+                k.release()
+                edges.release()
+            }
+
             val kernel = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, Size(5.0, 5.0))
             Imgproc.morphologyEx(binary, binary, Imgproc.MORPH_CLOSE, kernel)
             Imgproc.morphologyEx(binary, binary, Imgproc.MORPH_OPEN, kernel)
@@ -92,21 +144,31 @@ object BoardContourDetector {
             val imgArea = (workW * workH).toDouble()
             val cxImg = workW / 2.0
             val cyImg = workH / 2.0
-            var bestPts: Array<Point>? = null
+            val margin = max(4, min(workW, workH) / 40)
+
+            var best: Candidate? = null
             var bestScore = 0.0
 
             for (c in contours) {
                 val area = Imgproc.contourArea(c)
-                // Object should fill a reasonable portion of the frame, not the whole table edge
-                if (area < imgArea * 0.03 || area > imgArea * 0.72) {
+                // Compact object: 4 % … 40 % of frame (not whole desk)
+                if (area < imgArea * 0.04 || area > imgArea * 0.40) {
                     c.release()
                     continue
                 }
 
                 val rect = Imgproc.boundingRect(c)
+                // Touching image border → table / paper edge
+                if (rect.x <= margin || rect.y <= margin ||
+                    rect.x + rect.width >= workW - margin ||
+                    rect.y + rect.height >= workH - margin
+                ) {
+                    c.release()
+                    continue
+                }
+
                 val aspectRect = rect.width.toDouble() / rect.height.toDouble().coerceAtLeast(1.0)
-                // Reject extremely skinny strips (typical false table-edge detections)
-                if (aspectRect < 0.2 || aspectRect > 5.0) {
+                if (aspectRect < 0.25 || aspectRect > 4.5) {
                     c.release()
                     continue
                 }
@@ -114,65 +176,73 @@ object BoardContourDetector {
                 val c2f = MatOfPoint2f(*c.toArray())
                 val peri = Imgproc.arcLength(c2f, true)
                 val approx = MatOfPoint2f()
-                Imgproc.approxPolyDP(c2f, approx, 0.03 * peri, true)
+                Imgproc.approxPolyDP(c2f, approx, 0.025 * peri, true)
                 val pts = approx.toArray()
 
-                // Solidity: contour area / bounding box area
                 val boxArea = (rect.width * rect.height).toDouble().coerceAtLeast(1.0)
                 val solidity = area / boxArea
-                if (solidity < 0.35) {
+                if (solidity < 0.40) {
                     c2f.release(); approx.release(); c.release()
                     continue
                 }
 
-                // Prefer 4-corner rectangles near the center of the frame
+                val minRect = Imgproc.minAreaRect(c2f)
+                val mrSize = minRect.size
+                val mrAspect = max(mrSize.width, mrSize.height) /
+                    min(mrSize.width, mrSize.height).coerceAtLeast(1.0)
+                if (mrAspect > 5.0) {
+                    c2f.release(); approx.release(); c.release()
+                    continue
+                }
+
                 val m = Imgproc.moments(c)
                 val mx = if (m.m00 != 0.0) m.m10 / m.m00 else cxImg
                 val my = if (m.m00 != 0.0) m.m01 / m.m00 else cyImg
                 val distNorm = hypot(mx - cxImg, my - cyImg) / hypot(cxImg, cyImg)
-                val centerBonus = 1.0 + (1.0 - distNorm.coerceIn(0.0, 1.0))
+                val centerBonus = 1.0 + 1.2 * (1.0 - distNorm.coerceIn(0.0, 1.0))
 
                 val rectBonus = when {
-                    pts.size == 4 -> 1.6
-                    pts.size in 5..6 -> 1.2
+                    pts.size == 4 -> 1.8
+                    pts.size in 5..6 -> 1.3
                     pts.size in 3..8 -> 1.0
-                    else -> 0.6
+                    else -> 0.5
                 }
 
-                val score = area * rectBonus * centerBonus * solidity
+                val landscapeBonus = when {
+                    aspectRect in 1.2..3.2 -> 1.25
+                    aspectRect in 0.6..1.2 -> 1.1
+                    else -> 0.9
+                }
+
+                val fill = area / imgArea
+                val sizeBonus = when {
+                    fill in 0.08..0.28 -> 1.3
+                    fill in 0.05..0.35 -> 1.1
+                    else -> 0.85
+                }
+
+                val score = area * rectBonus * centerBonus * solidity * landscapeBonus * sizeBonus
                 c2f.release()
                 approx.release()
                 c.release()
 
-                if (score > bestScore && pts.size in 3..10) {
+                if (score > bestScore && pts.size in 3..12) {
                     bestScore = score
-                    // Prefer axis-aligned bounding quad for stable overlay when approx is noisy
-                    bestPts = if (pts.size == 4) pts else arrayOf(
-                        Point(rect.x.toDouble(), rect.y.toDouble()),
-                        Point((rect.x + rect.width).toDouble(), rect.y.toDouble()),
-                        Point((rect.x + rect.width).toDouble(), (rect.y + rect.height).toDouble()),
-                        Point(rect.x.toDouble(), (rect.y + rect.height).toDouble())
-                    )
+                    val outPts = if (pts.size == 4) {
+                        pts
+                    } else {
+                        arrayOf(
+                            Point(rect.x.toDouble(), rect.y.toDouble()),
+                            Point((rect.x + rect.width).toDouble(), rect.y.toDouble()),
+                            Point((rect.x + rect.width).toDouble(), (rect.y + rect.height).toDouble()),
+                            Point(rect.x.toDouble(), (rect.y + rect.height).toDouble())
+                        )
+                    }
+                    best = Candidate(outPts, score)
                 }
             }
-
-            val chosen = bestPts ?: return ContourResult(emptyList(), aspect)
-
-            val points = chosen.map { p ->
-                NormPoint(
-                    x = (p.x / workW).toFloat().coerceIn(0f, 1f),
-                    y = (p.y / workH).toFloat().coerceIn(0f, 1f)
-                )
-            }
-            return ContourResult(points, aspect)
-        } catch (e: Exception) {
-            Log.w(TAG, "detect failed: ${e.message}")
-            return ContourResult(emptyList(), 1f)
+            return best
         } finally {
-            yMat?.release()
-            upright?.release()
-            small?.release()
-            blurred?.release()
             binary?.release()
             hierarchy?.release()
         }
