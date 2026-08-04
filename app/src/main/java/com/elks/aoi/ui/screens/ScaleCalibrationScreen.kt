@@ -1,6 +1,7 @@
 package com.elks.aoi.ui.screens
 
 import androidx.camera.core.CameraSelector
+import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
@@ -38,11 +39,11 @@ import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -62,14 +63,18 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import com.elks.aoi.settings.AppSettings
+import com.elks.aoi.vision.RulerScaleDetector
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.hypot
 
-private enum class CalibMode { Overview, Camera }
+private enum class CalibMode { Overview, AutoCamera, ManualCamera }
 
 /**
  * Калибровка масштаба мм/px.
- * - Ручной ввод значения
- * - Две точки на кадре + известное расстояние в мм (линейка)
+ * 1) Авто: наведите на миллиметровую линейку — ИИ распознает деления (Hough + clustering).
+ * 2) Вручную: две точки + известное расстояние.
+ * 3) Ручной ввод мм/px.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -116,7 +121,8 @@ fun ScaleCalibrationScreen(
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     Text(
-                        text = "Масштаб используется для отображения размеров зон брака в миллиметрах.",
+                        text = "Масштаб используется для отображения размеров зон брака в миллиметрах. " +
+                            "Калибруйте на той же высоте, с которой снимаете платы.",
                         fontSize = 14.sp,
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
                     )
@@ -153,6 +159,57 @@ fun ScaleCalibrationScreen(
 
                     HorizontalDivider()
 
+                    Text(text = "Авто по линейке", fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
+                    Text(
+                        text = "Положите миллиметровую линейку в кадр. " +
+                            "ИИ найдёт деления (1 мм) и сохранит масштаб без ручных точек.",
+                        fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f)
+                    )
+                    Button(
+                        onClick = {
+                            if (!hasCameraPermission) {
+                                onRequestPermission()
+                            } else {
+                                message = null
+                                mode = CalibMode.AutoCamera
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Default.Straighten, contentDescription = null)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Авто-калибровка (камера)")
+                    }
+
+                    HorizontalDivider()
+
+                    Text(text = "Вручную: 2 точки", fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
+                    Text(
+                        text = "Отметьте два деления на линейке и укажите расстояние между ними в мм.",
+                        fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f)
+                    )
+                    Button(
+                        onClick = {
+                            if (!hasCameraPermission) {
+                                onRequestPermission()
+                            } else {
+                                point1 = null
+                                point2 = null
+                                message = null
+                                mode = CalibMode.ManualCamera
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Default.Straighten, contentDescription = null)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Открыть камеру (2 точки)")
+                    }
+
+                    HorizontalDivider()
+
                     Text(text = "Ручной ввод", fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
                     OutlinedTextField(
                         value = manualMmPxText,
@@ -180,32 +237,6 @@ fun ScaleCalibrationScreen(
                         Text("Сохранить")
                     }
 
-                    HorizontalDivider()
-
-                    Text(text = "По линейке (2 точки)", fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
-                    Text(
-                        text = "Наведите камеру на линейку, отметьте два деления и укажите расстояние между ними в мм.",
-                        fontSize = 13.sp,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f)
-                    )
-                    Button(
-                        onClick = {
-                            if (!hasCameraPermission) {
-                                onRequestPermission()
-                            } else {
-                                point1 = null
-                                point2 = null
-                                message = null
-                                mode = CalibMode.Camera
-                            }
-                        },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Icon(Icons.Default.Straighten, contentDescription = null)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Открыть камеру")
-                    }
-
                     OutlinedButton(
                         onClick = {
                             settings.setMmPerPixel(0f)
@@ -229,7 +260,21 @@ fun ScaleCalibrationScreen(
             }
         }
 
-        CalibMode.Camera -> {
+        CalibMode.AutoCamera -> {
+            AutoRulerCalibrationCamera(
+                onBack = { mode = CalibMode.Overview },
+                onDetected = { result ->
+                    if (result.confidence >= 0.35f && result.mmPerPixel > 0f) {
+                        settings.setMmPerPixel(result.mmPerPixel)
+                        manualMmPxText = String.format("%.5f", result.mmPerPixel)
+                        message = result.message
+                        mode = CalibMode.Overview
+                    }
+                }
+            )
+        }
+
+        CalibMode.ManualCamera -> {
             TwoPointCalibrationCamera(
                 point1 = point1,
                 point2 = point2,
@@ -283,6 +328,150 @@ fun ScaleCalibrationScreen(
 }
 
 @Composable
+private fun AutoRulerCalibrationCamera(
+    onBack: () -> Unit,
+    onDetected: (RulerScaleDetector.Result) -> Unit
+) {
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var status by remember { mutableStateOf("Наведите на линейку…") }
+    var lastConf by remember { mutableStateOf(0f) }
+    val busy = remember { AtomicBoolean(false) }
+    val stableHits = remember { intArrayOf(0) }
+    val lastMmPx = remember { floatArrayOf(0f) }
+    val analysisExecutor = remember { Executors.newSingleThreadExecutor() }
+
+    DisposableEffect(Unit) {
+        onDispose { analysisExecutor.shutdown() }
+    }
+
+    Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
+        AndroidView(
+            factory = { ctx ->
+                val previewView = PreviewView(ctx).apply {
+                    scaleType = PreviewView.ScaleType.FILL_CENTER
+                    implementationMode = PreviewView.ImplementationMode.COMPATIBLE
+                }
+                val providerFuture = ProcessCameraProvider.getInstance(ctx)
+                providerFuture.addListener({
+                    val provider = providerFuture.get()
+                    val preview = Preview.Builder().build().also {
+                        it.surfaceProvider = previewView.surfaceProvider
+                    }
+                    val analysis = ImageAnalysis.Builder()
+                        .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                        .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_YUV_420_888)
+                        .build()
+                    analysis.setAnalyzer(analysisExecutor) { imageProxy ->
+                        if (busy.getAndSet(true)) {
+                            imageProxy.close()
+                            return@setAnalyzer
+                        }
+                        try {
+                            val result = RulerScaleDetector.detect(imageProxy)
+                            if (result != null && result.confidence >= 0.35f) {
+                                val same = absRel(lastMmPx[0], result.mmPerPixel) < 0.12f
+                                if (same) stableHits[0]++ else {
+                                    stableHits[0] = 1
+                                    lastMmPx[0] = result.mmPerPixel
+                                }
+                                status = result.message
+                                lastConf = result.confidence
+                                if (stableHits[0] >= 4) {
+                                    onDetected(result)
+                                }
+                            } else {
+                                stableHits[0] = 0
+                                status = "Ищу деления линейки… держите ровно"
+                                lastConf = 0f
+                            }
+                        } catch (_: Exception) {
+                        } finally {
+                            busy.set(false)
+                            imageProxy.close()
+                        }
+                    }
+                    try {
+                        provider.unbindAll()
+                        provider.bindToLifecycle(
+                            lifecycleOwner,
+                            CameraSelector.DEFAULT_BACK_CAMERA,
+                            preview,
+                            analysis
+                        )
+                    } catch (_: Exception) {
+                    }
+                }, ContextCompat.getMainExecutor(ctx))
+                previewView
+            },
+            modifier = Modifier.fillMaxSize()
+        )
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .statusBarsPadding()
+                .padding(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            IconButton(
+                onClick = onBack,
+                colors = IconButtonDefaults.iconButtonColors(contentColor = Color.White)
+            ) {
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Назад")
+            }
+            Text(
+                "Авто по линейке",
+                color = Color.White,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 18.sp
+            )
+        }
+
+        Column(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .padding(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Card(
+                colors = CardDefaults.cardColors(
+                    containerColor = Color.Black.copy(alpha = 0.65f)
+                ),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        text = status,
+                        color = if (lastConf >= 0.35f) Color(0xFF69F0AE) else Color.White,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = "Положите линейку горизонтально, заполните ~1/2–2/3 кадра. " +
+                            "Нужны чёткие миллиметровые риски.",
+                        color = Color.White.copy(alpha = 0.7f),
+                        fontSize = 12.sp
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(12.dp))
+            OutlinedButton(onClick = onBack) {
+                Text("Отмена", color = Color.White)
+            }
+        }
+    }
+}
+
+private fun absRel(a: Float, b: Float): Float {
+    if (a <= 0f || b <= 0f) return 1f
+    return kotlin.math.abs(a - b) / maxOf(a, b)
+}
+
+@Composable
 private fun TwoPointCalibrationCamera(
     point1: Offset?,
     point2: Offset?,
@@ -299,27 +488,23 @@ private fun TwoPointCalibrationCamera(
         AndroidView(
             factory = { ctx ->
                 val previewView = PreviewView(ctx).apply {
-                    layoutParams = android.view.ViewGroup.LayoutParams(
-                        android.view.ViewGroup.LayoutParams.MATCH_PARENT,
-                        android.view.ViewGroup.LayoutParams.MATCH_PARENT
-                    )
                     scaleType = PreviewView.ScaleType.FILL_CENTER
+                    implementationMode = PreviewView.ImplementationMode.COMPATIBLE
                 }
-                val future = ProcessCameraProvider.getInstance(ctx)
-                future.addListener({
+                val providerFuture = ProcessCameraProvider.getInstance(ctx)
+                providerFuture.addListener({
+                    val provider = providerFuture.get()
+                    val preview = Preview.Builder().build().also {
+                        it.surfaceProvider = previewView.surfaceProvider
+                    }
                     try {
-                        val provider = future.get()
-                        val preview = Preview.Builder().build().also {
-                            it.surfaceProvider = previewView.surfaceProvider
-                        }
                         provider.unbindAll()
                         provider.bindToLifecycle(
                             lifecycleOwner,
                             CameraSelector.DEFAULT_BACK_CAMERA,
                             preview
                         )
-                    } catch (e: Exception) {
-                        e.printStackTrace()
+                    } catch (_: Exception) {
                     }
                 }, ContextCompat.getMainExecutor(ctx))
                 previewView
@@ -331,27 +516,26 @@ private fun TwoPointCalibrationCamera(
             modifier = Modifier
                 .fillMaxSize()
                 .pointerInput(Unit) {
-                    detectTapGestures { onTap(it) }
+                    detectTapGestures { offset -> onTap(offset) }
                 }
         ) {
-            fun drawCross(c: Offset, color: Color) {
-                val arm = 28f
-                drawLine(
-                    color, Offset(c.x - arm, c.y), Offset(c.x + arm, c.y),
-                    strokeWidth = 4f, cap = StrokeCap.Round
-                )
-                drawLine(
-                    color, Offset(c.x, c.y - arm), Offset(c.x, c.y + arm),
-                    strokeWidth = 4f, cap = StrokeCap.Round
-                )
-                drawCircle(color, radius = 10f, center = c)
+            val p1 = point1
+            val p2 = point2
+            if (p1 != null) {
+                drawCircle(Color(0xFF00E676), radius = 14f, center = p1)
+                drawCircle(Color.White, radius = 6f, center = p1)
             }
-            point1?.let { drawCross(it, Color(0xFF4CAF50)) }
-            point2?.let { drawCross(it, Color(0xFF2196F3)) }
-            if (point1 != null && point2 != null) {
+            if (p2 != null) {
+                drawCircle(Color(0xFF00E676), radius = 14f, center = p2)
+                drawCircle(Color.White, radius = 6f, center = p2)
+            }
+            if (p1 != null && p2 != null) {
                 drawLine(
-                    Color.Yellow, point1, point2,
-                    strokeWidth = 3f, cap = StrokeCap.Round
+                    Color(0xFF00E676),
+                    p1,
+                    p2,
+                    strokeWidth = 4f,
+                    cap = StrokeCap.Round
                 )
             }
         }
@@ -365,74 +549,64 @@ private fun TwoPointCalibrationCamera(
         ) {
             IconButton(
                 onClick = onBack,
-                colors = IconButtonDefaults.iconButtonColors(
-                    containerColor = Color.Black.copy(alpha = 0.5f)
-                )
+                colors = IconButtonDefaults.iconButtonColors(contentColor = Color.White)
             ) {
-                Icon(
-                    Icons.AutoMirrored.Filled.ArrowBack,
-                    contentDescription = "Назад",
-                    tint = Color.White
-                )
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Назад")
             }
-            Spacer(modifier = Modifier.width(8.dp))
             Text(
-                text = "Отметьте 2 точки на линейке",
+                "2 точки на линейке",
                 color = Color.White,
-                fontWeight = FontWeight.Medium,
-                modifier = Modifier
-                    .background(Color.Black.copy(alpha = 0.55f), RoundedCornerShape(8.dp))
-                    .padding(horizontal = 12.dp, vertical = 6.dp)
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 18.sp
             )
         }
 
         Column(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
-                .navigationBarsPadding()
-                .padding(16.dp)
                 .fillMaxWidth()
-                .background(Color.Black.copy(alpha = 0.7f), RoundedCornerShape(12.dp))
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
+                .navigationBarsPadding()
+                .background(Color.Black.copy(alpha = 0.55f))
+                .padding(16.dp)
         ) {
-            val status = when {
-                point1 == null -> "Нажмите 1-ю точку"
-                point2 == null -> "Нажмите 2-ю точку"
-                else -> {
-                    val px = hypot(
-                        (point2.x - point1.x).toDouble(),
-                        (point2.y - point1.y).toDouble()
-                    )
-                    String.format("Расстояние: %.0f px — введите мм", px)
-                }
-            }
-            Text(text = status, color = Color.White, fontWeight = FontWeight.SemiBold)
-
+            Text(
+                text = when {
+                    point1 == null -> "Коснитесь первого деления"
+                    point2 == null -> "Коснитесь второго деления"
+                    else -> "Введите расстояние между точками (мм)"
+                },
+                color = Color.White,
+                fontSize = 14.sp
+            )
+            Spacer(modifier = Modifier.height(8.dp))
             OutlinedTextField(
                 value = distanceMmText,
                 onValueChange = onDistanceChange,
-                label = { Text("Расстояние, мм", color = Color.White.copy(alpha = 0.8f)) },
+                label = { Text("Расстояние, мм", color = Color.White.copy(alpha = 0.7f)) },
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                colors = OutlinedTextFieldDefaults.colors(
+                modifier = Modifier.fillMaxWidth(),
+                colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
                     focusedTextColor = Color.White,
                     unfocusedTextColor = Color.White,
-                    focusedBorderColor = Color.White,
-                    unfocusedBorderColor = Color.White.copy(alpha = 0.5f),
-                    cursorColor = Color.White,
-                    focusedLabelColor = Color.White,
-                    unfocusedLabelColor = Color.White.copy(alpha = 0.7f)
-                ),
-                modifier = Modifier.fillMaxWidth()
+                    focusedBorderColor = Color(0xFF00E676),
+                    unfocusedBorderColor = Color.White.copy(alpha = 0.5f)
+                )
             )
-
-            Button(
-                onClick = onApply,
-                enabled = point1 != null && point2 != null,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text("Применить калибровку")
+            Spacer(modifier = Modifier.height(12.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                OutlinedButton(onClick = onBack, modifier = Modifier.weight(1f)) {
+                    Text("Отмена", color = Color.White)
+                }
+                Button(
+                    onClick = onApply,
+                    enabled = point1 != null && point2 != null,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Icon(Icons.Default.Check, contentDescription = null)
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Применить")
+                }
             }
         }
     }
