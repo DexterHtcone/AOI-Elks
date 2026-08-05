@@ -1,5 +1,7 @@
 package com.elks.aoi.ui.screens
 
+import android.os.Handler
+import android.os.Looper
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.Preview
@@ -72,9 +74,11 @@ private enum class CalibMode { Overview, AutoCamera, ManualCamera }
 
 /**
  * Калибровка масштаба мм/px.
- * 1) Авто: наведите на миллиметровую линейку — ИИ распознает деления (Hough + clustering).
+ * 1) Авто: CV ищет деления линейки; пользователь подтверждает «Сохранить».
  * 2) Вручную: две точки + известное расстояние.
  * 3) Ручной ввод мм/px.
+ *
+ * Экран камеры НЕ закрывается сам — только по «Сохранить» / «Назад» / «Отмена».
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -121,8 +125,7 @@ fun ScaleCalibrationScreen(
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     Text(
-                        text = "Масштаб используется для отображения размеров зон брака в миллиметрах. " +
-                            "Калибруйте на той же высоте, с которой снимаете платы.",
+                        text = "Масштаб используется для отображения размеров зон брака в миллиметрах.",
                         fontSize = 14.sp,
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
                     )
@@ -162,7 +165,7 @@ fun ScaleCalibrationScreen(
                     Text(text = "Авто по линейке", fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
                     Text(
                         text = "Положите миллиметровую линейку в кадр. " +
-                            "ИИ найдёт деления (1 мм) и сохранит масштаб без ручных точек.",
+                            "CV найдёт деления (1 мм). Сохраните результат кнопкой — окно само не закроется.",
                         fontSize = 13.sp,
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f)
                     )
@@ -263,13 +266,13 @@ fun ScaleCalibrationScreen(
         CalibMode.AutoCamera -> {
             AutoRulerCalibrationCamera(
                 onBack = { mode = CalibMode.Overview },
-                onDetected = { result ->
-                    if (result.confidence >= 0.35f && result.mmPerPixel > 0f) {
-                        settings.setMmPerPixel(result.mmPerPixel)
-                        manualMmPxText = String.format("%.5f", result.mmPerPixel)
-                        message = result.message
-                        mode = CalibMode.Overview
+                onSave = { result ->
+                    settings.setMmPerPixel(result.mmPerPixel)
+                    manualMmPxText = String.format("%.5f", result.mmPerPixel)
+                    message = result.message.ifBlank {
+                        String.format("Сохранено: %.5f мм/px", result.mmPerPixel)
                     }
+                    mode = CalibMode.Overview
                 }
             )
         }
@@ -327,19 +330,24 @@ fun ScaleCalibrationScreen(
     }
 }
 
+/**
+ * Live CV ruler detection. Does NOT auto-dismiss.
+ * User must press «Сохранить» when a stable reading is shown.
+ */
 @Composable
 private fun AutoRulerCalibrationCamera(
     onBack: () -> Unit,
-    onDetected: (RulerScaleDetector.Result) -> Unit
+    onSave: (RulerScaleDetector.Result) -> Unit
 ) {
-    val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     var status by remember { mutableStateOf("Наведите на линейку…") }
     var lastConf by remember { mutableStateOf(0f) }
+    var pending by remember { mutableStateOf<RulerScaleDetector.Result?>(null) }
     val busy = remember { AtomicBoolean(false) }
     val stableHits = remember { intArrayOf(0) }
     val lastMmPx = remember { floatArrayOf(0f) }
     val analysisExecutor = remember { Executors.newSingleThreadExecutor() }
+    val mainHandler = remember { Handler(Looper.getMainLooper()) }
 
     DisposableEffect(Unit) {
         onDispose { analysisExecutor.shutdown() }
@@ -369,21 +377,33 @@ private fun AutoRulerCalibrationCamera(
                         }
                         try {
                             val result = RulerScaleDetector.detect(imageProxy)
-                            if (result != null && result.confidence >= 0.35f) {
-                                val same = absRel(lastMmPx[0], result.mmPerPixel) < 0.12f
+                            if (result != null &&
+                                result.confidence >= 0.50f &&
+                                result.tickCount >= 8 &&
+                                result.mmPerPixel > 0.0005f &&
+                                result.mmPerPixel < 1f
+                            ) {
+                                val same = absRel(lastMmPx[0], result.mmPerPixel) < 0.10f
                                 if (same) stableHits[0]++ else {
                                     stableHits[0] = 1
                                     lastMmPx[0] = result.mmPerPixel
                                 }
-                                status = result.message
-                                lastConf = result.confidence
-                                if (stableHits[0] >= 4) {
-                                    onDetected(result)
+                                val hits = stableHits[0]
+                                mainHandler.post {
+                                    status = if (hits >= 3) {
+                                        result.message + " — можно сохранить"
+                                    } else {
+                                        result.message + " (стабилизация $hits/3)"
+                                    }
+                                    lastConf = result.confidence
+                                    if (hits >= 3) pending = result
                                 }
                             } else {
                                 stableHits[0] = 0
-                                status = "Ищу деления линейки… держите ровно"
-                                lastConf = 0f
+                                mainHandler.post {
+                                    status = "Ищу деления линейки… держите ровно"
+                                    lastConf = 0f
+                                }
                             }
                         } catch (_: Exception) {
                         } finally {
@@ -445,22 +465,42 @@ private fun AutoRulerCalibrationCamera(
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text(
                         text = status,
-                        color = if (lastConf >= 0.35f) Color(0xFF69F0AE) else Color.White,
+                        color = if (pending != null) Color(0xFF69F0AE) else Color.White,
                         fontSize = 14.sp,
                         fontWeight = FontWeight.Medium
                     )
                     Spacer(modifier = Modifier.height(6.dp))
                     Text(
                         text = "Положите линейку горизонтально, заполните ~1/2–2/3 кадра. " +
-                            "Нужны чёткие миллиметровые риски.",
+                            "Когда появится зелёный статус — нажмите «Сохранить».",
                         color = Color.White.copy(alpha = 0.7f),
                         fontSize = 12.sp
                     )
                 }
             }
             Spacer(modifier = Modifier.height(12.dp))
-            OutlinedButton(onClick = onBack) {
-                Text("Отмена", color = Color.White)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                OutlinedButton(
+                    onClick = onBack,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("Отмена", color = Color.White)
+                }
+                Button(
+                    onClick = {
+                        val r = pending
+                        if (r != null) onSave(r)
+                    },
+                    enabled = pending != null,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Icon(Icons.Default.Check, contentDescription = null)
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Сохранить")
+                }
             }
         }
     }
@@ -481,7 +521,6 @@ private fun TwoPointCalibrationCamera(
     onBack: () -> Unit,
     onApply: () -> Unit
 ) {
-    val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
 
     Box(modifier = Modifier.fillMaxSize()) {
