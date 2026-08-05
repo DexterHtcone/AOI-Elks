@@ -13,8 +13,8 @@ android {
         applicationId = "com.elks.aoi"
         minSdk = 26
         targetSdk = 35
-        versionCode = 16
-        versionName = "0.5.4"
+        versionCode = 17
+        versionName = "0.5.5"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -100,10 +100,8 @@ dependencies {
 
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
 
-    // Official OpenCV Android AAR on Maven Central (since 4.9.0)
     implementation("org.opencv:opencv:4.9.0")
 
-    // Coil for AsyncImage (catalog / board detail thumbnails)
     implementation("io.coil-kt:coil-compose:2.7.0")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
